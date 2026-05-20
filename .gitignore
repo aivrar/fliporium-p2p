@@ -16,6 +16,8 @@ fliporium
 
 # Per-node tailscale identity / data folder (each install is its own)
 fliporium-data/
+fliporium-data-*/
+flip-*-data/
 node-*/
 
 # Go build cache leftovers
