@@ -902,46 +902,57 @@ async function paintBackstage() {
 // ---------- search ----------
 
 let searchDebounce = null;
+
+function openSearch() {
+    const overlay = $("search-overlay");
+    overlay.classList.remove("hidden");
+    $("search-input").focus();
+    $("search-input").select();
+}
+function closeSearch() {
+    const overlay = $("search-overlay");
+    overlay.classList.add("hidden");
+    $("search-input").value = "";
+    $("search-results").innerHTML = "";
+}
+
 function bindSearch() {
     const input = $("search-input");
     const results = $("search-results");
     input.addEventListener("input", () => {
         clearTimeout(searchDebounce);
         const q = input.value.trim();
-        if (q.length < 2) { results.classList.add("hidden"); results.innerHTML = ""; return; }
+        if (q.length < 2) { results.innerHTML = ""; return; }
         searchDebounce = setTimeout(async () => {
             try {
                 const hits = await window.go.main.App.SearchMessages(q, 30);
                 renderSearchResults(hits || []);
             } catch (e) {
                 results.innerHTML = `<div class="search-empty">search: ${escapeAttr(String(e))}</div>`;
-                results.classList.remove("hidden");
             }
         }, 200);
     });
     document.addEventListener("keydown", (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
             e.preventDefault();
-            input.focus();
-            input.select();
-        } else if (e.key === "Escape" && document.activeElement === input) {
-            input.value = "";
-            results.classList.add("hidden");
-            input.blur();
+            openSearch();
+        } else if (e.key === "Escape" && !$("search-overlay").classList.contains("hidden")) {
+            closeSearch();
         }
     });
     document.addEventListener("click", (e) => {
-        if (!results.classList.contains("hidden") && !results.contains(e.target) && e.target !== input) {
-            results.classList.add("hidden");
+        const overlay = $("search-overlay");
+        if (!overlay.classList.contains("hidden") && !overlay.contains(e.target) && e.target.id !== "searchBtn") {
+            closeSearch();
         }
     });
+    $("searchBtn").addEventListener("click", openSearch);
 }
 
 function renderSearchResults(hits) {
     const results = $("search-results");
     if (hits.length === 0) {
         results.innerHTML = `<div class="search-empty">no matches</div>`;
-        results.classList.remove("hidden");
         return;
     }
     results.innerHTML = "";
@@ -957,8 +968,7 @@ function renderSearchResults(hits) {
             <div class="snippet">${h.snippet || escapeAttr((h.text || "").slice(0, 120))}</div>
         `;
         div.addEventListener("click", () => {
-            $("search-results").classList.add("hidden");
-            $("search-input").value = "";
+            closeSearch();
             if (h.boothId) selectBooth(h.boothId);
             else if (h.peer) selectPeer(h.peer);
             if (h.uuid) setTimeout(() => jumpToMessage(h.uuid), 250);
@@ -1148,7 +1158,7 @@ function playChime() {
     } catch (e) {}
 }
 
-async function maybeChime(forContext) {
+async function maybeChime() {
     try {
         const on = await window.go.main.App.GetPref("sounds_on");
         if (on !== "1") return;
@@ -1292,13 +1302,17 @@ function bindDragDrop() {
         });
         window.runtime.OnFileDrop(async (x, y, paths) => {
             $("drop-overlay").classList.add("hidden");
-            if (!state.selected) {
-                toast("select a peer first");
+            if (!state.selection) {
+                toast("select a peer or booth first");
                 return;
             }
             for (const p of (paths || [])) {
                 try {
-                    await window.go.main.App.SendFlip(state.selected, p);
+                    if (state.selection.kind === "booth") {
+                        await window.go.main.App.SendBoothFlip(state.selection.key, p);
+                    } else {
+                        await window.go.main.App.SendFlip(state.selection.key, p);
+                    }
                 } catch (e) {
                     toast("flip " + p + ": " + e);
                 }
@@ -1410,7 +1424,7 @@ function bindEvents() {
     });
 
     window.runtime.EventsOn("info", (info) => {
-        if (info.peer === state.selected) {
+        if (isPeerSelected(info.peer)) {
             appendMessage({ peer: info.peer, direction: "info", text: info.text, at: info.at });
         } else {
             toast(info.peer + ": " + info.text, 3000);

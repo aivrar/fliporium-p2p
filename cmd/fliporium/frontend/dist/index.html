@@ -11,14 +11,17 @@
 <header id="topbar">
     <div class="brand">Fliporium</div>
     <div id="self">
-        <input id="search-input" class="search-input" placeholder="search messages... (Ctrl+K)" autocomplete="off">
         <span id="selfDot" class="dot offline"></span>
         <span id="selfName">…</span>
         <span id="selfIp"></span>
+        <button id="searchBtn" class="topbar-btn" title="Search messages (Ctrl+K)">search</button>
         <button id="backstageBtn" class="topbar-btn" title="Backstage — settings, twin, themes">Backstage</button>
     </div>
-    <div id="search-results" class="hidden"></div>
 </header>
+<div id="search-overlay" class="hidden">
+    <input id="search-input" class="search-input-overlay" placeholder="search messages... (Esc to close)" autocomplete="off">
+    <div id="search-results"></div>
+</div>
 
 <main>
     <aside id="floor">
