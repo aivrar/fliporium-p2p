@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Fliporium">
+  <title>Fliporium</title>
+  <!-- soft shadow under the tent -->
+  <polygon points="26,220 230,220 220,228 36,228" fill="#281e46" opacity="0.24"/>
+  <!-- striped wedges (8 alternating purple / cream rays from peak to base) -->
+  <g>
+    <polygon points="128,60 32,210 56,210" fill="#c9a7ff"/>
+    <polygon points="128,60 56,210 80,210" fill="#fff5d1"/>
+    <polygon points="128,60 80,210 104,210" fill="#c9a7ff"/>
+    <polygon points="128,60 104,210 128,210" fill="#fff5d1"/>
+    <polygon points="128,60 128,210 152,210" fill="#c9a7ff"/>
+    <polygon points="128,60 152,210 176,210" fill="#fff5d1"/>
+    <polygon points="128,60 176,210 200,210" fill="#c9a7ff"/>
+    <polygon points="128,60 200,210 224,210" fill="#fff5d1"/>
+  </g>
+  <!-- tent brim (dark purple skirt) -->
+  <polygon points="32,210 224,210 218,224 38,224" fill="#5b3aa3"/>
+  <!-- tent edge outlines -->
+  <line x1="128" y1="60" x2="32" y2="210" stroke="#5b3aa3" stroke-width="3" stroke-linecap="round"/>
+  <line x1="128" y1="60" x2="224" y2="210" stroke="#5b3aa3" stroke-width="3" stroke-linecap="round"/>
+  <!-- entrance arch -->
+  <path d="M 109 210 A 19 25 0 0 1 147 210 Z" fill="#5b3aa3"/>
+  <!-- flag pole -->
+  <line x1="128" y1="24" x2="128" y2="60" stroke="#5b3aa3" stroke-width="3" stroke-linecap="round"/>
+  <!-- green pennant -->
+  <polygon points="128,24 150,30 128,38" fill="#4ade80"/>
+  <!-- top ball cap -->
+  <circle cx="128" cy="60" r="5" fill="#5b3aa3"/>
+</svg>
