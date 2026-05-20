@@ -30,3 +30,7 @@ coverage.out
 .vscode/
 .idea/
 *.swp
+
+# Stray captured streams from debugging
+stdout.log
+stderr.log
