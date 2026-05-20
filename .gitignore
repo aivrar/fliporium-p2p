@@ -4,8 +4,8 @@
 .preauth-test
 .fix-log.txt
 
-# Temp scripts used during setup; kept locally for reference but not history
-.tmp-*.sh
+# One-shot setup scripts and artifacts; not source of truth
+.tmp-*
 .headscale-config-default.yaml
 
 # Build output
