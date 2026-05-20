@@ -17,6 +17,7 @@ fliporium
 
 # Test assets
 test-image.png
+screenshot-*.png
 
 # Per-node tailscale identity / data folder (each install is its own)
 fliporium-data/
