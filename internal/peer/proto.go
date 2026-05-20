@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const ProtocolVersion = "fliporium/0.7"
+const ProtocolVersion = "fliporium/0.8"
 
 type MessageType string
 
@@ -37,6 +37,9 @@ const (
 	TypeShowtimeStart MessageType = "SHOWTIME_START"
 	TypeShowtimeState MessageType = "SHOWTIME_STATE"
 	TypeShowtimeEnd   MessageType = "SHOWTIME_END"
+
+	// Workshop = collaborative tools (v0.8 ships the shared notepad).
+	TypeNotepadUpdate MessageType = "NOTEPAD_UPDATE"
 )
 
 type Envelope struct {
@@ -95,6 +98,16 @@ type ShowtimeEnd struct {
 	SessionID string    `json:"session_id"`
 	BoothID   string    `json:"booth_id"`
 	At        time.Time `json:"at"`
+}
+
+// NotepadUpdate carries the full text of a booth's shared notepad, plus a
+// monotonically increasing Version for last-write-wins conflict resolution.
+type NotepadUpdate struct {
+	BoothID string    `json:"booth_id"`
+	Text    string    `json:"text"`
+	Version int64     `json:"version"`
+	Editor  string    `json:"editor"`
+	At      time.Time `json:"at"`
 }
 
 type Bye struct {

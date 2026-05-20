@@ -102,6 +102,8 @@ const (
 	EventShowtimeStarted HubEventKind = "showtime-started"
 	EventShowtimeState   HubEventKind = "showtime-state"
 	EventShowtimeEnded   HubEventKind = "showtime-ended"
+
+	EventNotepadUpdated HubEventKind = "notepad-updated"
 )
 
 // MessageEventData accompanies EventMessage so the app layer can route by Booth.
@@ -251,6 +253,15 @@ func (h *Hub) SendShowtimeEnd(peerName string, s ShowtimeEnd) error {
 	return c.WriteFrame(TypeShowtimeEnd, s)
 }
 
+// SendNotepadUpdate broadcasts a NOTEPAD_UPDATE to one peer.
+func (h *Hub) SendNotepadUpdate(peerName string, n NotepadUpdate) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypeNotepadUpdate, n)
+}
+
 // ByeAll sends BYE to every peer and closes their connections.
 func (h *Hub) ByeAll(reason string) {
 	h.mu.RLock()
@@ -337,6 +348,11 @@ func (h *Hub) runLoop(c *PeerConn) {
 			var s ShowtimeEnd
 			if err := json.Unmarshal(env.Body, &s); err == nil {
 				h.emit(HubEvent{Kind: EventShowtimeEnded, Peer: c.Name, Data: &s})
+			}
+		case TypeNotepadUpdate:
+			var n NotepadUpdate
+			if err := json.Unmarshal(env.Body, &n); err == nil {
+				h.emit(HubEvent{Kind: EventNotepadUpdated, Peer: c.Name, Data: &n})
 			}
 		}
 	}

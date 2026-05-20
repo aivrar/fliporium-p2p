@@ -78,5 +78,14 @@ func main() {
 			}
 			fmt.Printf("    %s  %s  %s  %s\n", m.At.Format("15:04:05"), arrow, m.Peer, m.Text)
 		}
+
+		n, _ := s.GetBoothNotepad(ctx, b.ID)
+		if n.Version > 0 {
+			preview := n.Text
+			if len(preview) > 80 {
+				preview = preview[:80] + "..."
+			}
+			fmt.Printf("    notepad: v%d by %s at %s: %s\n", n.Version, n.LastEditor, n.LastModified.Format("15:04:05"), preview)
+		}
 	}
 }

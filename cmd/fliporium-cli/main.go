@@ -24,6 +24,8 @@
 //	                    — when set with FLIPORIUM_AUTOBOOTHFLIP, start a
 //	                      showtime referencing that booth-flipped file and
 //	                      broadcast STATE every 2s for 15s. Scripted-test only.
+//	FLIPORIUM_AUTONOTEPAD
+//	                    — text to write into the auto-created booth's notepad.
 //	FLIPORIUM_HEADLESS  — when set, skip the interactive REPL and just run as
 //	                      a listening peer until SIGINT. Used by scripted tests.
 //	FLIPORIUM_AUTOQUIT_SECONDS
@@ -312,6 +314,36 @@ func main() {
 						}
 					}
 				}
+				if v := os.Getenv("FLIPORIUM_AUTONOTEPAD"); v != "" {
+					time.Sleep(500 * time.Millisecond)
+					cur, _ := db.GetBoothNotepad(ctx, id)
+					next := store.BoothNotepad{
+						BoothID:      id,
+						Text:         v,
+						Version:      cur.Version + 1,
+						LastEditor:   hostname,
+						LastModified: time.Now().UTC(),
+					}
+					if _, err := db.UpdateBoothNotepad(ctx, next); err != nil {
+						fmt.Fprintf(os.Stderr, "autonotepad save: %v\n", err)
+					}
+					upd := peer.NotepadUpdate{
+						BoothID: id,
+						Text:    v,
+						Version: next.Version,
+						Editor:  hostname,
+						At:      next.LastModified,
+					}
+					for _, m := range cleaned {
+						if m == hostname {
+							continue
+						}
+						if hub.Get(m) != nil {
+							_ = hub.SendNotepadUpdate(m, upd)
+						}
+					}
+					fmt.Fprintf(os.Stderr, "autonotepad: wrote v%d for booth %s\n", next.Version, id[:8])
+				}
 			}
 		}()
 	}
@@ -427,6 +459,26 @@ func displayEvents(ctx context.Context, st *store.Store, selfName string, events
 			if s != nil {
 				fmt.Printf("\r\033[K[%s] *** SHOWTIME_END session=%s\n> ", ts, s.SessionID[:8])
 			}
+		case peer.EventNotepadUpdated:
+			n, _ := ev.Data.(*peer.NotepadUpdate)
+			if n == nil {
+				continue
+			}
+			applied, _ := st.UpdateBoothNotepad(ctx, store.BoothNotepad{
+				BoothID: n.BoothID, Text: n.Text, Version: n.Version, LastEditor: n.Editor, LastModified: n.At,
+			})
+			if applied {
+				booth, _ := st.GetBooth(ctx, n.BoothID)
+				name := booth.Name
+				if name == "" {
+					name = n.BoothID[:8]
+				}
+				preview := n.Text
+				if len(preview) > 60 {
+					preview = preview[:60] + "..."
+				}
+				fmt.Printf("\r\033[K[%s] *** NOTEPAD [%s] v%d by %s: %s\n> ", ts, name, n.Version, n.Editor, preview)
+			}
 		}
 	}
 }
@@ -474,6 +526,8 @@ func runREPL(ctx context.Context, srv *tsnet.Server, hub *peer.Hub, tlsCfg *tls.
 			handleFlip(ctx, hub, st, selfName, rest)
 		case "booth":
 			handleBooth(ctx, hub, st, selfName, rest)
+		case "notepad":
+			handleNotepad(ctx, hub, st, selfName, rest)
 		case "disconnect":
 			handleDisconnect(hub, rest)
 		case "quit", "exit":
@@ -507,6 +561,8 @@ func printHelp() {
 	fmt.Println("  booth members <id|name>     show a booth's members")
 	fmt.Println("  booth create <name> <p1,p2> create a booth with the listed members")
 	fmt.Println("  booth send <id|name> <txt>  send a message to a booth")
+	fmt.Println("  notepad get <booth>         show the shared notepad")
+	fmt.Println("  notepad set <booth> <txt>   update the shared notepad")
 	fmt.Println("  disconnect [<peer>]         close one or the only open peer")
 	fmt.Println("  quit                        BYE all peers and exit")
 }
@@ -738,6 +794,63 @@ func handleBooth(ctx context.Context, hub *peer.Hub, st *store.Store, selfName, 
 		fmt.Printf("sent to %d/%d members of %q\n", delivered, len(members)-1, b.Name)
 	default:
 		fmt.Println("usage: booth list | members <id|name> | create <name> <p1,p2,...> | send <id|name> <text>")
+	}
+}
+
+func handleNotepad(ctx context.Context, hub *peer.Hub, st *store.Store, selfName, rest string) {
+	sub, args := splitCmd(rest)
+	switch sub {
+	case "get":
+		b, ok := findBooth(ctx, st, args)
+		if !ok {
+			return
+		}
+		n, err := st.GetBoothNotepad(ctx, b.ID)
+		if err != nil {
+			fmt.Println("notepad get:", err)
+			return
+		}
+		fmt.Printf("notepad for %q (v%d, last %s by %s):\n%s\n", b.Name, n.Version, n.LastModified.Format("15:04:05"), n.LastEditor, n.Text)
+	case "set":
+		parts := strings.SplitN(args, " ", 2)
+		if len(parts) < 2 {
+			fmt.Println("usage: notepad set <booth> <text>")
+			return
+		}
+		b, ok := findBooth(ctx, st, parts[0])
+		if !ok {
+			return
+		}
+		text := parts[1]
+		cur, _ := st.GetBoothNotepad(ctx, b.ID)
+		next := store.BoothNotepad{
+			BoothID:      b.ID,
+			Text:         text,
+			Version:      cur.Version + 1,
+			LastEditor:   selfName,
+			LastModified: time.Now().UTC(),
+		}
+		if _, err := st.UpdateBoothNotepad(ctx, next); err != nil {
+			fmt.Println("notepad set:", err)
+			return
+		}
+		upd := peer.NotepadUpdate{BoothID: b.ID, Text: text, Version: next.Version, Editor: selfName, At: next.LastModified}
+		members, _ := st.BoothMembers(ctx, b.ID)
+		delivered := 0
+		for _, m := range members {
+			if m.PeerName == selfName {
+				continue
+			}
+			if hub.Get(m.PeerName) == nil {
+				continue
+			}
+			if err := hub.SendNotepadUpdate(m.PeerName, upd); err == nil {
+				delivered++
+			}
+		}
+		fmt.Printf("notepad set v%d, broadcast to %d/%d members\n", next.Version, delivered, len(members)-1)
+	default:
+		fmt.Println("usage: notepad get <booth> | notepad set <booth> <text>")
 	}
 }
 
