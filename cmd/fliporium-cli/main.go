@@ -640,10 +640,6 @@ func showPeers(ctx context.Context, srv *tsnet.Server) {
 	}
 }
 
-func handleSay(hub *peer.Hub, rest string) {
-	handleSayWithRelay(context.Background(), hub, nil, "", rest)
-}
-
 func handleSayWithRelay(ctx context.Context, hub *peer.Hub, st *store.Store, selfName, rest string) {
 	names := hub.Names()
 	if len(names) == 0 {
