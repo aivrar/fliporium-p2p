@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fliporium</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header id="topbar">
+    <div class="brand">Fliporium</div>
+    <div id="self">
+        <span id="selfDot" class="dot offline"></span>
+        <span id="selfName">…</span>
+        <span id="selfIp"></span>
+        <button id="twinBtn" class="topbar-btn" title="Twin Mode (pair another of your devices)">twin</button>
+    </div>
+</header>
+
+<main>
+    <aside id="floor">
+        <div class="panel-title">The Floor</div>
+
+        <div class="floor-section-title">Peers</div>
+        <ul id="peers" class="peers"></ul>
+        <div id="floor-empty" class="empty hidden">no peers visible yet</div>
+
+        <div class="floor-section-title">
+            <span>Booths</span>
+            <button id="createBoothBtn" class="link-btn" title="create a booth">+</button>
+        </div>
+        <ul id="booths" class="peers"></ul>
+        <div id="booths-empty" class="empty">no booths yet</div>
+
+        <div class="floor-add">
+            <input id="connectInput" placeholder="connect to hostname..." autocomplete="off">
+            <button id="connectBtn" title="dial">go</button>
+        </div>
+    </aside>
+
+    <section id="chat">
+        <div id="chat-header">
+            <span id="chat-title">select a peer on The Floor</span>
+            <span id="chat-state"></span>
+        </div>
+        <div id="notepad-panel" class="hidden">
+            <div class="header">
+                <span>NOTEPAD</span>
+                <span id="notepad-meta"></span>
+            </div>
+            <textarea id="notepad-text" placeholder="shared notes — anyone in the booth can edit..."></textarea>
+        </div>
+        <div id="showtime-panel" class="hidden"></div>
+        <ol id="messages" class="messages"></ol>
+        <form id="composer">
+            <button id="attachBtn" type="button" title="flip a file" disabled>flip</button>
+            <input id="composerInput" autocomplete="off" placeholder="type a message - **markdown** works..." disabled>
+            <button id="sendBtn" type="submit" disabled>send</button>
+        </form>
+    </section>
+</main>
+
+<div id="drop-overlay" class="hidden">
+    <div class="drop-msg">drop to flip</div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/main.js"></script>
+</body>
+</html>

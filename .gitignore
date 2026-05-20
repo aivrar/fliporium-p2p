@@ -12,8 +12,11 @@
 *.exe
 *.exe~
 *.dll
-fliporium-test
-fliporium
+# Bare-name binary fallbacks (anchored to repo root so we don't ignore
+# the cmd/fliporium/ source dir!).
+/fliporium-test
+/fliporium
+/fliporium-cli
 
 # Test assets
 test-image.png
