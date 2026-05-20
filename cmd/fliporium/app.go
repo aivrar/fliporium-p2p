@@ -368,16 +368,14 @@ func (a *App) eventPump() {
 				BoothID:    boothID,
 				ParentUUID: parentUUID,
 			})
-			// Twin relay: if we have a paired twin and this is a 1:1, send
-			// the same row to our twin so both devices share history.
-			if boothID == "" {
-				a.relayToTwin(peer.TwinSyncMessage{
-					OriginalPeer: ev.Peer,
-					Direction:    store.DirectionIn,
-					Text:         ev.Text,
-					At:           at,
-				})
-			}
+			// Twin relay: covers both 1:1 and booth messages.
+			a.relayToTwin(peer.TwinSyncMessage{
+				OriginalPeer: ev.Peer,
+				Direction:    store.DirectionIn,
+				Text:         ev.Text,
+				At:           at,
+				BoothID:      boothID,
+			})
 		case peer.EventMessageReaction:
 			r, _ := ev.Data.(*peer.MessageReaction)
 			if r == nil {
@@ -567,8 +565,6 @@ func (a *App) eventPump() {
 			}
 			twin, _ := a.store.GetSetting(a.ctx, store.SettingTwinHostname)
 			if twin == "" || twin != ev.Peer {
-				// Either we don't have a twin set, or this came from someone
-				// other than our twin. Refuse to graft fake history.
 				continue
 			}
 			_ = a.store.AppendMessageBooth(a.ctx, ts.OriginalPeer, ts.Direction, ts.Text, ts.BoothID, ts.At)
@@ -1116,6 +1112,14 @@ func (a *App) SendBoothMessage(boothID, text string) error {
 		At:        now.Format(time.RFC3339Nano),
 		BoothID:   boothID,
 	})
+	// Twin relay for booth messages too.
+	a.relayToTwin(peer.TwinSyncMessage{
+		OriginalPeer: a.hostname,
+		Direction:    store.DirectionOut,
+		Text:         text,
+		At:           now,
+		BoothID:      boothID,
+	})
 	if delivered == 0 && len(sendErrs) > 0 {
 		return fmt.Errorf("no peers reachable: %s", strings.Join(sendErrs, "; "))
 	}
@@ -1289,6 +1293,37 @@ func (a *App) PeerStatuses() (map[string]string, error) {
 		out[k] = v
 	}
 	return out, nil
+}
+
+// BurnEverything permanently wipes the local data directory and quits the app.
+// The caller must pass the literal phrase "burn everything" or the call is
+// rejected. After this returns, all chat history, identity, caught files,
+// notepad text, and settings are gone — there is no undo.
+func (a *App) BurnEverything(confirm string) error {
+	if confirm != "burn everything" {
+		return fmt.Errorf("confirmation phrase mismatch (type exactly: burn everything)")
+	}
+	// Tear down running services so the data dir's files are unlocked.
+	if a.hub != nil {
+		a.hub.ByeAll("burning")
+	}
+	if a.ln != nil {
+		a.ln.Close()
+	}
+	if a.srv != nil {
+		a.srv.Close()
+	}
+	if a.store != nil {
+		a.store.Close()
+	}
+	// Best-effort wipe. tailscaled may have left files we can't immediately
+	// delete on Windows due to handles still settling; the next launch will
+	// re-create whatever's missing anyway.
+	if err := os.RemoveAll(a.dataDir); err != nil {
+		log.Printf("burn: removeAll %s: %v", a.dataDir, err)
+	}
+	wailsruntime.Quit(a.ctx)
+	return nil
 }
 
 // GenerateInviteQR builds a fliporium://join URL for the configured server

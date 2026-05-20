@@ -821,6 +821,17 @@ html[data-theme="light"] .bs-row input { background: #fff; border-color: #d0d0d8
 .bs-row button:hover { background: #3a3148; color: #f1f1ff; }
 html[data-theme="light"] .bs-row button { background: #ece4ff; color: #5b3aa3; border-color: #d6c5ff; }
 .bs-hint { color: #6f7384; font-size: 11px; margin-top: 6px; line-height: 1.4; }
+.bs-section.danger h3 { color: #ef4444; }
+.bs-row button.danger {
+    background: #3a1c1c;
+    border-color: #5b2828;
+    color: #ef4444;
+}
+.bs-row button.danger:not(:disabled):hover { background: #5b2828; color: #fff; }
+.bs-row button.danger:disabled { opacity: 0.35; cursor: not-allowed; }
+html[data-theme="light"] .bs-section.danger h3 { color: #b91c1c; }
+html[data-theme="light"] .bs-row button.danger { background: #fee2e2; border-color: #fecaca; color: #b91c1c; }
+html[data-theme="light"] .bs-row button.danger:not(:disabled):hover { background: #ef4444; color: #fff; }
 #bs-invite-qr { margin-top: 10px; display: flex; justify-content: center; }
 #bs-invite-qr img { width: 220px; height: 220px; image-rendering: pixelated; background: white; border-radius: 6px; }
 

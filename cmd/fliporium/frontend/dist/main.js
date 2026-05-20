@@ -1014,6 +1014,17 @@ function bindBackstage() {
             $("bs-invite-qr").innerHTML = `<img src="${dataUrl}" alt="invite QR">`;
         } catch (e) { toast("QR: " + e); }
     });
+    // Burn-everything: arm the button only when the user types the magic phrase.
+    $("bs-burn-confirm").addEventListener("input", () => {
+        $("bs-burn-go").disabled = $("bs-burn-confirm").value !== "burn everything";
+    });
+    $("bs-burn-go").addEventListener("click", async () => {
+        if ($("bs-burn-confirm").value !== "burn everything") return;
+        if (!confirm("This will permanently wipe ALL of this device's Fliporium data.\n\nLast chance to cancel. Proceed?")) return;
+        try {
+            await window.go.main.App.BurnEverything("burn everything");
+        } catch (e) { toast("burn: " + e); }
+    });
 }
 
 // ---------- status auto-detect ----------
