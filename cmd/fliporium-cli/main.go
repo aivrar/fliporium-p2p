@@ -26,6 +26,7 @@
 //	                      broadcast STATE every 2s for 15s. Scripted-test only.
 //	FLIPORIUM_AUTONOTEPAD
 //	                    — text to write into the auto-created booth's notepad.
+//	FLIPORIUM_AUTOTWIN  — hostname to pair as twin on startup (persists in store).
 //	FLIPORIUM_HEADLESS  — when set, skip the interactive REPL and just run as
 //	                      a listening peer until SIGINT. Used by scripted tests.
 //	FLIPORIUM_AUTOQUIT_SECONDS
@@ -118,8 +119,13 @@ func main() {
 	}
 	defer db.Close()
 
+	if v := os.Getenv("FLIPORIUM_AUTOTWIN"); v != "" {
+		_ = db.SetSetting(context.Background(), store.SettingTwinHostname, v)
+	}
+
 	hub := peer.NewHub()
 	hub.CatchRoot = filepath.Join(dir, "catch")
+	hubFromCLI = hub
 
 	listenAddr := fmt.Sprintf(":%d", peer.Port)
 	ln, err := srv.Listen("tcp", listenAddr)
@@ -383,6 +389,10 @@ func main() {
 	close(hub.Events)
 }
 
+// hubFromCLI gives the events loop access to the Hub so it can relay 1:1
+// messages to the twin. Set once in main() before any events fire.
+var hubFromCLI *peer.Hub
+
 func displayEvents(ctx context.Context, st *store.Store, selfName string, events <-chan peer.HubEvent) {
 	for ev := range events {
 		ts := ev.At.Local().Format("15:04:05")
@@ -402,6 +412,14 @@ func displayEvents(ctx context.Context, st *store.Store, selfName string, events
 				fmt.Printf("\r\033[K[%s] [%s] %s: %s\n> ", ts, name, ev.Peer, ev.Text)
 			} else {
 				fmt.Printf("\r\033[K[%s] %s: %s\n> ", ts, ev.Peer, ev.Text)
+				// Twin relay (CLI side).
+				if twin, _ := st.GetSetting(ctx, store.SettingTwinHostname); twin != "" && twin != selfName {
+					if hubFromCLI != nil && hubFromCLI.Get(twin) != nil {
+						_ = hubFromCLI.SendTwinSyncMessage(twin, peer.TwinSyncMessage{
+							OriginalPeer: ev.Peer, Direction: store.DirectionIn, Text: ev.Text, At: ev.At,
+						})
+					}
+				}
 			}
 		case peer.EventConnect:
 			fmt.Printf("\r\033[K[%s] *** %s connected (%s)\n> ", ts, ev.Peer, ev.Text)
@@ -459,6 +477,21 @@ func displayEvents(ctx context.Context, st *store.Store, selfName string, events
 			if s != nil {
 				fmt.Printf("\r\033[K[%s] *** SHOWTIME_END session=%s\n> ", ts, s.SessionID[:8])
 			}
+		case peer.EventTwinSyncedMessage:
+			tm, _ := ev.Data.(*peer.TwinSyncMessage)
+			if tm == nil {
+				continue
+			}
+			twin, _ := st.GetSetting(ctx, store.SettingTwinHostname)
+			if twin == "" || twin != ev.Peer {
+				continue
+			}
+			_ = st.AppendMessageBooth(ctx, tm.OriginalPeer, tm.Direction, tm.Text, tm.BoothID, tm.At)
+			arrow := "<-"
+			if tm.Direction == store.DirectionOut {
+				arrow = "->"
+			}
+			fmt.Printf("\r\033[K[%s] (twin-sync) %s %s: %s\n> ", ts, arrow, tm.OriginalPeer, tm.Text)
 		case peer.EventNotepadUpdated:
 			n, _ := ev.Data.(*peer.NotepadUpdate)
 			if n == nil {
@@ -521,13 +554,15 @@ func runREPL(ctx context.Context, srv *tsnet.Server, hub *peer.Hub, tlsCfg *tls.
 				fmt.Println("connect:", err)
 			}
 		case "say", "msg":
-			handleSay(hub, rest)
+			handleSayWithRelay(ctx, hub, st, selfName, rest)
 		case "flip":
 			handleFlip(ctx, hub, st, selfName, rest)
 		case "booth":
 			handleBooth(ctx, hub, st, selfName, rest)
 		case "notepad":
 			handleNotepad(ctx, hub, st, selfName, rest)
+		case "twin":
+			handleTwin(ctx, st, selfName, rest)
 		case "disconnect":
 			handleDisconnect(hub, rest)
 		case "quit", "exit":
@@ -563,6 +598,9 @@ func printHelp() {
 	fmt.Println("  booth send <id|name> <txt>  send a message to a booth")
 	fmt.Println("  notepad get <booth>         show the shared notepad")
 	fmt.Println("  notepad set <booth> <txt>   update the shared notepad")
+	fmt.Println("  twin set <hostname>         pair with another of your devices")
+	fmt.Println("  twin show                   show the paired twin (if any)")
+	fmt.Println("  twin clear                  unpair")
 	fmt.Println("  disconnect [<peer>]         close one or the only open peer")
 	fmt.Println("  quit                        BYE all peers and exit")
 }
@@ -592,6 +630,10 @@ func showPeers(ctx context.Context, srv *tsnet.Server) {
 }
 
 func handleSay(hub *peer.Hub, rest string) {
+	handleSayWithRelay(context.Background(), hub, nil, "", rest)
+}
+
+func handleSayWithRelay(ctx context.Context, hub *peer.Hub, st *store.Store, selfName, rest string) {
 	names := hub.Names()
 	if len(names) == 0 {
 		fmt.Println("not connected to any peer; use 'connect <hostname>' first")
@@ -616,6 +658,51 @@ func handleSay(hub *peer.Hub, rest string) {
 	}
 	if err := hub.Send(target, text); err != nil {
 		fmt.Println("send:", err)
+		return
+	}
+	if st != nil {
+		now := time.Now().UTC()
+		_ = st.AppendMessage(ctx, target, store.DirectionOut, text, now)
+		if twin, _ := st.GetSetting(ctx, store.SettingTwinHostname); twin != "" && twin != selfName {
+			if hub.Get(twin) != nil {
+				_ = hub.SendTwinSyncMessage(twin, peer.TwinSyncMessage{
+					OriginalPeer: target, Direction: store.DirectionOut, Text: text, At: now,
+				})
+			}
+		}
+	}
+}
+
+func handleTwin(ctx context.Context, st *store.Store, selfName, rest string) {
+	sub, args := splitCmd(rest)
+	switch sub {
+	case "show", "":
+		v, _ := st.GetSetting(ctx, store.SettingTwinHostname)
+		if v == "" {
+			fmt.Println("(no twin paired)")
+		} else {
+			fmt.Println("twin:", v)
+		}
+	case "set":
+		args = strings.TrimSpace(args)
+		if args == "" {
+			fmt.Println("usage: twin set <hostname>")
+			return
+		}
+		if args == selfName {
+			fmt.Println("cannot pair with yourself")
+			return
+		}
+		if err := st.SetSetting(ctx, store.SettingTwinHostname, args); err != nil {
+			fmt.Println("twin set:", err)
+			return
+		}
+		fmt.Printf("paired with %s\n", args)
+	case "clear":
+		_ = st.DeleteSetting(ctx, store.SettingTwinHostname)
+		fmt.Println("unpaired")
+	default:
+		fmt.Println("usage: twin show | twin set <hostname> | twin clear")
 	}
 }
 

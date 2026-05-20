@@ -170,6 +170,11 @@ CREATE TABLE IF NOT EXISTS booth_notepads (
     last_modified TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS flips (
     id           TEXT PRIMARY KEY,
     peer         TEXT NOT NULL,
@@ -489,6 +494,34 @@ func (s *Store) GetBooth(ctx context.Context, id string) (Booth, error) {
 	b.FoundedAt, _ = time.Parse(time.RFC3339Nano, foundedStr)
 	return b, nil
 }
+
+// GetSetting returns the value for a key, or empty string if absent.
+func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM app_settings WHERE key = ?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}
+
+// SetSetting upserts a single key/value pair.
+func (s *Store) SetSetting(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO app_settings (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+	`, key, value)
+	return err
+}
+
+// DeleteSetting removes a key (no-op if missing).
+func (s *Store) DeleteSetting(ctx context.Context, key string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM app_settings WHERE key = ?`, key)
+	return err
+}
+
+// SettingTwinHostname is the well-known key for the paired twin.
+const SettingTwinHostname = "twin_hostname"
 
 // GetBoothNotepad returns the shared notepad for a booth (or an empty record
 // if the booth has none yet).

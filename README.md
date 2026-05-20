@@ -15,7 +15,8 @@ Headscale tailnet. See `fliporium-brief.md` for the full vision.
 | 6 | Booths (named multi-peer group chat) + mesh fan-out + GUI/CLI surfaces | done v0.1 (no reactions/edit/delete/threads/themes/emoji/search) |
 | 7 | Showtime: watch-parties / listening-rooms with synced HTML5 playback (leader-led) | done v0.1 wire-level (visual confirmation pending; no voice/video/screen) |
 | 8 | Workshop: one shared notepad per booth, last-write-wins | done v0.1 (no real-time cursors / CRDT, no whiteboard / playlist / lists / calendar / mini-games) |
-| 9+ | Twin Mode, polish | not started |
+| 9 | Twin Mode: pair two of your own instances, 1:1 chat history relays both ways | done v0.1 (1:1 only, no booth/flip sync, manual hostname pairing) |
+| 10 | Polish (themes, sounds, QR invites, landing page, first-launch tour) | not started |
 
 ## Layout
 

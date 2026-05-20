@@ -104,6 +104,8 @@ const (
 	EventShowtimeEnded   HubEventKind = "showtime-ended"
 
 	EventNotepadUpdated HubEventKind = "notepad-updated"
+
+	EventTwinSyncedMessage HubEventKind = "twin-synced-message"
 )
 
 // MessageEventData accompanies EventMessage so the app layer can route by Booth.
@@ -262,6 +264,15 @@ func (h *Hub) SendNotepadUpdate(peerName string, n NotepadUpdate) error {
 	return c.WriteFrame(TypeNotepadUpdate, n)
 }
 
+// SendTwinSyncMessage sends a 1:1 message relay to a paired twin.
+func (h *Hub) SendTwinSyncMessage(peerName string, m TwinSyncMessage) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypeTwinSyncMessage, m)
+}
+
 // ByeAll sends BYE to every peer and closes their connections.
 func (h *Hub) ByeAll(reason string) {
 	h.mu.RLock()
@@ -353,6 +364,11 @@ func (h *Hub) runLoop(c *PeerConn) {
 			var n NotepadUpdate
 			if err := json.Unmarshal(env.Body, &n); err == nil {
 				h.emit(HubEvent{Kind: EventNotepadUpdated, Peer: c.Name, Data: &n})
+			}
+		case TypeTwinSyncMessage:
+			var t TwinSyncMessage
+			if err := json.Unmarshal(env.Body, &t); err == nil {
+				h.emit(HubEvent{Kind: EventTwinSyncedMessage, Peer: c.Name, Data: &t})
 			}
 		}
 	}

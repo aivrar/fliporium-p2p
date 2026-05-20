@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const ProtocolVersion = "fliporium/0.8"
+const ProtocolVersion = "fliporium/0.9"
 
 type MessageType string
 
@@ -40,6 +40,10 @@ const (
 
 	// Workshop = collaborative tools (v0.8 ships the shared notepad).
 	TypeNotepadUpdate MessageType = "NOTEPAD_UPDATE"
+
+	// Twin Mode (v0.9): one Fliporium instance relays its own 1:1 chat
+	// history to a paired sibling instance owned by the same user.
+	TypeTwinSyncMessage MessageType = "TWIN_SYNC_MESSAGE"
 )
 
 type Envelope struct {
@@ -108,6 +112,20 @@ type NotepadUpdate struct {
 	Version int64     `json:"version"`
 	Editor  string    `json:"editor"`
 	At      time.Time `json:"at"`
+}
+
+// TwinSyncMessage is one 1:1 chat row relayed from one of a user's devices
+// to its paired Twin. OriginalPeer is the sender (if Direction == "in") or the
+// recipient (if Direction == "out") on the originating device.
+//
+// TWIN_SYNC_MESSAGE never triggers further relays — it's a leaf in the
+// propagation graph to avoid cycles.
+type TwinSyncMessage struct {
+	OriginalPeer string    `json:"original_peer"`
+	Direction    string    `json:"direction"`
+	Text         string    `json:"text"`
+	At           time.Time `json:"at"`
+	BoothID      string    `json:"booth_id,omitempty"` // reserved; not used in v0.9
 }
 
 type Bye struct {
