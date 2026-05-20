@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Join the Fliporium tailnet</title>
+<meta name="description" content="Someone invited you to their Fliporium tailnet. Three steps: download the app, run it, paste your invite key.">
+<meta name="theme-color" content="#131318">
+<meta name="robots" content="noindex">
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/style.css">
+<style>
+/* Page-local styles, kept inline to avoid loading anything else. */
+.join-wrap { max-width: 640px; margin: 0 auto; padding: 40px 28px 80px; }
+.join-card {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-radius: 14px;
+    padding: 28px 28px 22px;
+    text-align: center;
+    margin-bottom: 24px;
+}
+.join-card.dim { opacity: 0.85; }
+.join-mark { width: 88px; height: 88px; margin: 0 auto 16px; display: block; }
+.join-step-num {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--purple);
+    color: #2a1a4a;
+    font-family: var(--serif);
+    font-weight: 700;
+    font-size: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 14px;
+}
+.key-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+    align-items: stretch;
+}
+.key-row input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    color: var(--ink);
+    padding: 10px 14px;
+    font-family: var(--mono);
+    font-size: 13px;
+    outline: none;
+}
+.key-row input:focus { border-color: var(--purple); }
+.copy-btn {
+    background: var(--purple);
+    color: #2a1a4a;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+.copy-btn:hover { background: var(--cream); color: var(--purple-deep); }
+.copy-btn.copied { background: var(--green); color: #1a2a20; }
+.copy-btn.copied::before { content: "✓ "; }
+.no-key {
+    color: var(--ink-muted);
+    font-style: italic;
+    font-family: var(--serif);
+    padding: 8px 0;
+}
+.dl-btn {
+    display: inline-block;
+    margin-top: 16px;
+    background: var(--purple);
+    color: #2a1a4a;
+    border-radius: 10px;
+    padding: 14px 28px;
+    font-weight: 500;
+    font-size: 16px;
+    text-decoration: none;
+    transition: background 0.12s, color 0.12s, transform 0.08s;
+}
+.dl-btn:hover { background: var(--cream); color: var(--purple-deep); transform: translateY(-1px); }
+.dl-btn small {
+    display: block;
+    font-size: 11px;
+    font-weight: 400;
+    margin-top: 4px;
+    opacity: 0.8;
+    letter-spacing: 0.04em;
+}
+.join-card h2 {
+    font-family: var(--serif);
+    font-size: 24px;
+    margin: 0 0 10px;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+}
+.join-card p { color: var(--ink-soft); margin: 0 0 6px; }
+.join-card p.tip { color: var(--ink-muted); font-size: 13px; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<header class="topnav">
+    <a href="/" class="brand">
+        <img src="/logo.svg" alt="" width="32" height="32">
+        <span>Fliporium</span>
+    </a>
+    <nav>
+        <a href="/docs">Docs</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/stats">Stats</a>
+    </nav>
+</header>
+
+<main>
+
+<div class="page-title">
+    <h1>You're invited</h1>
+    <p>Three quick steps and you're on your friend's Fliporium tailnet.</p>
+</div>
+
+<div class="join-wrap">
+
+    <div class="join-card">
+        <div class="join-step-num">1</div>
+        <h2>Download Fliporium</h2>
+        <p>One file. No installer. Windows 10 or 11.</p>
+        <a class="dl-btn" href="/dl/fliporium.exe">
+            Download fliporium.exe
+            <small>~ 34 MB · portable .exe</small>
+        </a>
+    </div>
+
+    <div class="join-card">
+        <div class="join-step-num">2</div>
+        <h2>Run it</h2>
+        <p>Double-click the file you just downloaded. The first time, you'll see a small &ldquo;Welcome to Fliporium&rdquo; window asking for an invite key.</p>
+    </div>
+
+    <div class="join-card">
+        <div class="join-step-num">3</div>
+        <h2>Paste your invite key</h2>
+        <p>This is your one-time key. Tap <strong>Copy</strong>, then paste it into the welcome window.</p>
+        <div class="key-row">
+            <input id="invite-key" type="text" readonly placeholder="(no key in this link)">
+            <button id="copy-btn" class="copy-btn">Copy</button>
+        </div>
+        <p class="tip" id="key-note"></p>
+    </div>
+
+</div>
+
+</main>
+
+<footer class="sitefoot">
+    <div class="foot-inner">
+        <a href="/" class="brand">
+            <img src="/logo.svg" alt="" width="24" height="24">
+            <span>Fliporium</span>
+        </a>
+        <nav>
+            <a href="/docs">Docs</a>
+            <a href="/privacy">Privacy</a>
+            <a href="/stats">Stats</a>
+        </nav>
+        <p class="foot-line">
+            Your invite key only exists in your browser's URL — this page never sends it to our server.
+        </p>
+    </div>
+</footer>
+
+<script>
+// Read the pre-auth key from the URL fragment (#k=hskey-auth-...).
+// Fragments are client-only -- the server never sees them, so the access
+// log won't capture the key even when someone shares the link.
+(function () {
+    const input = document.getElementById("invite-key");
+    const btn = document.getElementById("copy-btn");
+    const note = document.getElementById("key-note");
+
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const key = params.get("k");
+
+    if (!key) {
+        input.value = "";
+        input.placeholder = "(no key in this link)";
+        btn.disabled = true;
+        btn.style.opacity = "0.45";
+        btn.style.cursor = "not-allowed";
+        note.textContent = "This link doesn't include an invite key. Ask the friend who sent it to regenerate it from their Backstage → Invite a friend.";
+        return;
+    }
+
+    input.value = key;
+    note.textContent = "Keep this link private — anyone who has it can join the tailnet.";
+
+    btn.addEventListener("click", async () => {
+        try {
+            await navigator.clipboard.writeText(key);
+            const old = btn.textContent;
+            btn.textContent = "Copied";
+            btn.classList.add("copied");
+            setTimeout(() => {
+                btn.textContent = old;
+                btn.classList.remove("copied");
+            }, 1800);
+        } catch (e) {
+            input.select();
+            document.execCommand("copy");
+            btn.textContent = "Copied";
+            btn.classList.add("copied");
+            setTimeout(() => {
+                btn.textContent = "Copy";
+                btn.classList.remove("copied");
+            }, 1800);
+        }
+    });
+
+    // Auto-select the key when the user clicks the input -- one less step.
+    input.addEventListener("click", () => input.select());
+})();
+</script>
+
+</body>
+</html>

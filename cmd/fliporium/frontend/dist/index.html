@@ -77,6 +77,20 @@
 
 <div id="confetti-layer" aria-hidden="true"></div>
 
+<div id="onboard-overlay" class="hidden">
+    <div class="onboard-card">
+        <div class="onboard-icon">🎪</div>
+        <h2>Welcome to Fliporium</h2>
+        <p>Paste the invite key your friend sent you. It looks like <code>hskey-auth-…</code></p>
+        <input id="onboard-key" placeholder="hskey-auth-…" autocomplete="off" spellcheck="false">
+        <div id="onboard-error" class="onboard-error hidden"></div>
+        <button id="onboard-go">Join the tailnet</button>
+        <p class="onboard-hint">
+            Don't have a key yet? Ask whoever invited you — they generate it from their own Fliporium (<em>Backstage → Invite a friend</em>). You only need this once; after this launch, your device remembers itself.
+        </p>
+    </div>
+</div>
+
 <div id="tour-overlay" class="hidden">
     <div class="tour-card">
         <div class="tour-icon" id="tour-icon">🎪</div>
@@ -128,9 +142,19 @@
         <p class="bs-hint">Generate a QR code containing your Headscale server URL + a pre-auth key. Friend scans, joins your tailnet.</p>
         <div class="bs-row">
             <input id="bs-invite-key" placeholder="paste pre-auth key (hskey-auth-...)" autocomplete="off">
-            <button id="bs-invite-go">QR</button>
+            <button id="bs-invite-go">Generate</button>
         </div>
-        <div id="bs-invite-qr"></div>
+        <div id="bs-invite-out" class="invite-out hidden">
+            <div id="bs-invite-qr"></div>
+            <div class="invite-actions">
+                <button id="bs-invite-copy-link" class="ghost" title="Copy a shareable link your friend can click">Copy link</button>
+                <button id="bs-invite-copy-text" class="ghost" title="Copy a friendly message you can paste into chat or email">Copy invite text</button>
+            </div>
+            <details class="invite-preview">
+                <summary>Preview the text</summary>
+                <pre id="bs-invite-text"></pre>
+            </details>
+        </div>
     </section>
     <section class="bs-section">
         <h3>Help</h3>

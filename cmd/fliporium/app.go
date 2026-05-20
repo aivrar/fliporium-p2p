@@ -33,6 +33,7 @@ type AppState string
 
 const (
 	StateInitializing AppState = "initializing"
+	StateNeedsAuthKey AppState = "needs-auth-key"
 	StateReady        AppState = "ready"
 	StateError        AppState = "error"
 )
@@ -193,13 +194,21 @@ type App struct {
 	hostname string
 	dataDir  string
 
+	// authKeyCh delivers the pre-auth key from the JS-side onboarding modal
+	// when the user has no existing tsnet state and no FLIPORIUM_AUTHKEY env
+	// var. initBackground blocks on this channel until SetAuthKey is called.
+	authKeyCh chan string
+
 	statusMu   sync.Mutex
 	peerStatus map[string]string // peer name -> "active"|"idle"|"away"
 	myStatus   string
 }
 
 func NewApp() *App {
-	return &App{state: StateInitializing}
+	return &App{
+		state:     StateInitializing,
+		authKeyCh: make(chan string, 1),
+	}
 }
 
 func env(key, fallback string) string {
@@ -258,12 +267,27 @@ func (a *App) initBackground() {
 	a.store = st
 
 	log.Printf("init: bringing up tsnet")
+	authKey := os.Getenv("FLIPORIUM_AUTHKEY")
+	// If we don't have a key AND there's no previously-registered tsnet state
+	// in the data dir, we cannot bring tsnet up -- it'd just time out. Sit in
+	// StateNeedsAuthKey until SetAuthKey delivers one from the onboarding UI.
+	if authKey == "" && !hasTsnetState(a.dataDir) {
+		log.Printf("init: no auth key and no prior state; waiting for onboarding key")
+		a.setState(StateNeedsAuthKey, "paste your invite key to get on the tailnet")
+		select {
+		case authKey = <-a.authKeyCh:
+			log.Printf("init: got auth key from onboarding (%d chars)", len(authKey))
+		case <-a.ctx.Done():
+			return
+		}
+	}
+
 	a.setState(StateInitializing, "bringing up tsnet…")
 	srv := &tsnet.Server{
 		Hostname:   a.hostname,
 		Dir:        a.dataDir,
 		ControlURL: controlURL,
-		AuthKey:    os.Getenv("FLIPORIUM_AUTHKEY"),
+		AuthKey:    authKey,
 		Logf:       func(format string, args ...any) {},
 		UserLogf:   func(format string, args ...any) {},
 	}
@@ -648,7 +672,42 @@ func ipsAsStrings(ips any) []string {
 	}
 }
 
+// hasTsnetState reports whether the data dir already contains tsnet state
+// from a previous successful registration. If yes, tsnet can come up with
+// no AuthKey -- it uses the cached identity. If no, we need an auth key to
+// register a brand-new node, and that's where the onboarding modal comes in.
+//
+// tsnet writes "tailscaled.state" once it has registered. That single file is
+// our signal.
+func hasTsnetState(dir string) bool {
+	st, err := os.Stat(filepath.Join(dir, "tailscaled.state"))
+	return err == nil && st.Size() > 0
+}
+
 // ---------- bound methods (callable from JS) ----------
+
+// SetAuthKey delivers a pre-auth key from the onboarding modal. Only used on
+// a brand-new install where no FLIPORIUM_AUTHKEY env var was set and there's
+// no cached tsnet state yet. Subsequent launches won't hit this path because
+// tsnet caches its identity in <data>/tailscaled.state.
+func (a *App) SetAuthKey(key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("invite key is empty")
+	}
+	a.mu.RLock()
+	st := a.state
+	a.mu.RUnlock()
+	if st != StateNeedsAuthKey {
+		return fmt.Errorf("not waiting for an invite key (state=%s)", st)
+	}
+	select {
+	case a.authKeyCh <- key:
+		return nil
+	default:
+		return fmt.Errorf("an auth key is already being processed")
+	}
+}
 
 // Status returns the current readiness state plus our own identity.
 func (a *App) Status() AppStatus {
@@ -1326,20 +1385,54 @@ func (a *App) BurnEverything(confirm string) error {
 	return nil
 }
 
-// GenerateInviteQR builds a fliporium://join URL for the configured server
-// and the supplied pre-auth key, then renders it as a base64 PNG data URL the
-// frontend can stick into an <img src>.
+// inviteURL builds the fliporium.com/join URL for sharing a pre-auth key.
+// The key lives in the URL fragment (#k=...) which the browser never sends to
+// the server, so the website's access logs never see it.
+func inviteURL(authKey string) string {
+	return "https://fliporium.com/join#k=" + url.QueryEscape(authKey)
+}
+
+// GenerateInviteURL returns the shareable web URL that wraps the pre-auth
+// key. The friend opens it in a browser, sees a three-step walkthrough, and
+// gets a one-click copy of the key to paste into Fliporium's onboarding
+// modal on first launch.
+func (a *App) GenerateInviteURL(authKey string) (string, error) {
+	authKey = strings.TrimSpace(authKey)
+	if authKey == "" {
+		return "", fmt.Errorf("auth key required")
+	}
+	return inviteURL(authKey), nil
+}
+
+// GenerateInviteText returns a friendly multi-line invite the host can paste
+// into iMessage / Discord / email / wherever. Self-contained: includes the
+// download link and the key so the recipient doesn't need to be told
+// anything else.
+func (a *App) GenerateInviteText(authKey string) (string, error) {
+	authKey = strings.TrimSpace(authKey)
+	if authKey == "" {
+		return "", fmt.Errorf("auth key required")
+	}
+	return fmt.Sprintf(`Hi! Join my Fliporium tailnet:
+
+1. Download: https://fliporium.com/dl/fliporium.exe
+2. Run it. The first launch asks you to paste an invite key.
+3. Paste this one:
+
+%s
+
+You'll show up on my Floor as soon as you're connected.`, authKey), nil
+}
+
+// GenerateInviteQR renders the invite URL as a base64 PNG data URL. Scanning
+// the QR with a phone camera (or any QR reader) opens the /join page on
+// fliporium.com, where the recipient gets a copy-paste button for the key.
 func (a *App) GenerateInviteQR(authKey string) (string, error) {
 	authKey = strings.TrimSpace(authKey)
 	if authKey == "" {
 		return "", fmt.Errorf("auth key required")
 	}
-	u := url.URL{Scheme: "fliporium", Host: "join"}
-	q := u.Query()
-	q.Set("url", controlURL)
-	q.Set("key", authKey)
-	u.RawQuery = q.Encode()
-	png, err := qrcode.Encode(u.String(), qrcode.Medium, 256)
+	png, err := qrcode.Encode(inviteURL(authKey), qrcode.Medium, 256)
 	if err != nil {
 		return "", err
 	}

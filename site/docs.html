@@ -96,20 +96,50 @@
 
 <h2 id="invite">Invite a friend</h2>
 <p>
-    Inviting someone is a one-time thing. Once they're on your tailnet, they
-    show up on your Floor and stay there.
+    Inviting someone is a one-time thing per friend. Once they're on your
+    tailnet, they show up on your Floor and stay there.
 </p>
+
+<h3>Step 1 — generate the invite</h3>
 <ol>
     <li>Open <strong>Backstage</strong> (top-right of the app) → <em>Invite a friend</em>.</li>
     <li>Paste a fresh Headscale pre-auth key in the input. (You'll have this if you set up the control server yourself, or someone running the tailnet will give it to you.)</li>
-    <li>Click <strong>QR</strong>. A QR code appears.</li>
-    <li>Your friend opens their phone camera at the screen, scans the code, follows the prompt.</li>
-    <li>They download <code>fliporium.exe</code> from <a href="https://fliporium.com">fliporium.com</a>, run it, and within seconds they're on your Floor.</li>
+    <li>Click <strong>Generate</strong>.</li>
 </ol>
+
+<h3>Step 2 — pick how to send it</h3>
+<p>
+    The Generate button gives you <strong>three equivalent ways</strong> to
+    pass the invite to your friend. Use whichever fits the situation:
+</p>
+<dl>
+    <dt>QR code</dt>
+    <dd>Best when you're <em>in the same room</em>. Friend points a phone camera at your screen, taps the link, and gets a one-click copy of the key.</dd>
+    <dt>Copy link</dt>
+    <dd>Best for sending in <em>chat or email</em>. The link looks like <code>https://fliporium.com/join#k=hskey-…</code>. Anyone who opens it lands on a page that walks them through downloading and pasting the key. (The key lives in the URL fragment — the <code>#</code> bit — so the website's server never sees it.)</dd>
+    <dt>Copy invite text</dt>
+    <dd>Best for sending the <em>whole instruction</em> at once. The text already says &ldquo;Download here, then paste this key&rdquo; — your friend doesn't have to read separate messages.</dd>
+</dl>
+
+<h3>Step 3 — what your friend does</h3>
+<p>
+    Whichever method you used, your friend ends up with the pre-auth key. On
+    their side:
+</p>
+<ol>
+    <li>They download <code>fliporium.exe</code> from <a href="https://fliporium.com">fliporium.com</a> (or via the link you sent).</li>
+    <li>They run it. On the very first launch, a small <em>Welcome to Fliporium</em> window appears and asks for their invite key.</li>
+    <li>They paste the key, click <strong>Join the tailnet</strong>, and within a few seconds they show up on your Floor.</li>
+</ol>
+<p>
+    From then on, that device remembers itself. They never need an invite key
+    again on that machine.
+</p>
+
 <blockquote>
-    Pre-auth keys are single-use by default for a reason: they grant tailnet
-    access. Don't paste one into a screenshot, a public chat, or a video stream.
-    Generate a fresh one per invite.
+    Pre-auth keys grant tailnet access. Don't paste one into a screenshot,
+    a public chat, or a video stream. If the key is reusable, also rotate
+    it after the friend has joined.
 </blockquote>
 
 <h2 id="chat">Chatting one-to-one</h2>

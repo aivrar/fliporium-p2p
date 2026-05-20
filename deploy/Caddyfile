@@ -22,13 +22,15 @@ fliporium.com, www.fliporium.com {
 		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none';"
 	}
 
-	# Pretty URLs: /docs -> /docs.html (and same for privacy, stats).
+	# Pretty URLs: /docs -> /docs.html, plus /privacy, /stats, /join.
 	@docs path /docs /docs/
 	rewrite @docs /docs.html
 	@privacy path /privacy /privacy/
 	rewrite @privacy /privacy.html
 	@stats path /stats /stats/
 	rewrite @stats /stats.html
+	@join path /join /join/
+	rewrite @join /join.html
 
 	# Stats API and download both go to the flipstats sidecar.
 	# `handle` (not handle_path) preserves the full request path -- flipstats
