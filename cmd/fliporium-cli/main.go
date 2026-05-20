@@ -17,6 +17,13 @@
 //	                      and send invites. Scripted-test convenience.
 //	FLIPORIUM_AUTOBOOTHSAY
 //	                    — text broadcast into the auto-created booth.
+//	FLIPORIUM_AUTOBOOTHFLIP
+//	                    — file path; booth-flipped to all members of the
+//	                      auto-created booth (shared id across receivers).
+//	FLIPORIUM_AUTOSHOWTIME
+//	                    — when set with FLIPORIUM_AUTOBOOTHFLIP, start a
+//	                      showtime referencing that booth-flipped file and
+//	                      broadcast STATE every 2s for 15s. Scripted-test only.
 //	FLIPORIUM_HEADLESS  — when set, skip the interactive REPL and just run as
 //	                      a listening peer until SIGINT. Used by scripted tests.
 //	FLIPORIUM_AUTOQUIT_SECONDS
@@ -228,6 +235,83 @@ func main() {
 					}
 					_ = db.AppendMessageBooth(ctx, hostname, store.DirectionOut, autoBoothSay, id, time.Now().UTC())
 				}
+				// Booth-flip + Showtime (scripted test path).
+				autoBoothFlip := os.Getenv("FLIPORIUM_AUTOBOOTHFLIP")
+				autoShowtime := os.Getenv("FLIPORIUM_AUTOSHOWTIME") != ""
+				if autoBoothFlip != "" {
+					time.Sleep(500 * time.Millisecond)
+					flipID, err := cliNewBoothID()
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "autoboothflip id: %v\n", err)
+					} else {
+						for _, m := range cleaned {
+							if m == hostname {
+								continue
+							}
+							if hub.Get(m) != nil {
+								if err := hub.SendFlipWithID(m, autoBoothFlip, flipID); err != nil {
+									fmt.Fprintf(os.Stderr, "autoboothflip %s: %v\n", m, err)
+								}
+							}
+						}
+						fmt.Fprintf(os.Stderr, "autoboothflip: sent %s (id=%s) to booth\n", autoBoothFlip, flipID[:8])
+						if autoShowtime {
+							// Wait a bit for the flip to actually arrive at receivers.
+							time.Sleep(3 * time.Second)
+							sessionID, err := cliNewBoothID()
+							if err == nil {
+								start := peer.ShowtimeStart{
+									SessionID: sessionID,
+									BoothID:   id,
+									FlipID:    flipID,
+									Leader:    hostname,
+									Filename:  filepath.Base(autoBoothFlip),
+									At:        time.Now().UTC(),
+								}
+								for _, m := range cleaned {
+									if m == hostname {
+										continue
+									}
+									if hub.Get(m) != nil {
+										_ = hub.SendShowtimeStart(m, start)
+									}
+								}
+								fmt.Fprintf(os.Stderr, "autoshowtime: started session %s\n", sessionID[:8])
+								// Emit 5 state updates over 10s.
+								for i := 0; i < 5; i++ {
+									time.Sleep(2 * time.Second)
+									pos := float64(i+1) * 2.0
+									st := peer.ShowtimeState{
+										SessionID: sessionID,
+										BoothID:   id,
+										Playing:   true,
+										Position:  pos,
+										At:        time.Now().UTC(),
+									}
+									for _, m := range cleaned {
+										if m == hostname {
+											continue
+										}
+										if hub.Get(m) != nil {
+											_ = hub.SendShowtimeState(m, st)
+										}
+									}
+								}
+								// End it cleanly.
+								end := peer.ShowtimeEnd{SessionID: sessionID, BoothID: id, At: time.Now().UTC()}
+								for _, m := range cleaned {
+									if m == hostname {
+										continue
+									}
+									if hub.Get(m) != nil {
+										_ = hub.SendShowtimeEnd(m, end)
+									}
+								}
+								fmt.Fprintf(os.Stderr, "autoshowtime: ended\n")
+							}
+						}
+					}
+				}
 			}
 		}()
 	}
@@ -326,6 +410,23 @@ func displayEvents(ctx context.Context, st *store.Store, selfName string, events
 				_ = st.AddBoothMember(ctx, inv.ID, m, inv.FoundedAt)
 			}
 			fmt.Printf("\r\033[K[%s] *** invited to booth %q by %s (members: %s)\n> ", ts, inv.Name, ev.Peer, strings.Join(inv.Members, ", "))
+		case peer.EventShowtimeStarted:
+			s, _ := ev.Data.(*peer.ShowtimeStart)
+			if s != nil {
+				fmt.Printf("\r\033[K[%s] *** SHOWTIME_START from %s: session=%s flip=%s file=%s\n> ",
+					ts, s.Leader, s.SessionID[:8], s.FlipID[:8], s.Filename)
+			}
+		case peer.EventShowtimeState:
+			s, _ := ev.Data.(*peer.ShowtimeState)
+			if s != nil {
+				fmt.Printf("\r\033[K[%s] SHOWTIME_STATE session=%s playing=%v position=%.2fs\n> ",
+					ts, s.SessionID[:8], s.Playing, s.Position)
+			}
+		case peer.EventShowtimeEnded:
+			s, _ := ev.Data.(*peer.ShowtimeEnd)
+			if s != nil {
+				fmt.Printf("\r\033[K[%s] *** SHOWTIME_END session=%s\n> ", ts, s.SessionID[:8])
+			}
 		}
 	}
 }
@@ -370,7 +471,7 @@ func runREPL(ctx context.Context, srv *tsnet.Server, hub *peer.Hub, tlsCfg *tls.
 		case "say", "msg":
 			handleSay(hub, rest)
 		case "flip":
-			handleFlip(hub, rest)
+			handleFlip(ctx, hub, st, selfName, rest)
 		case "booth":
 			handleBooth(ctx, hub, st, selfName, rest)
 		case "disconnect":
@@ -401,6 +502,7 @@ func printHelp() {
 	fmt.Println("  say @<peer> <text>          send to a specific peer")
 	fmt.Println("  flip <path>                 send a file to the only open peer")
 	fmt.Println("  flip @<peer> <path>         send a file to a specific peer")
+	fmt.Println("  flip booth <id|name> <path> send a file to every booth member")
 	fmt.Println("  booth list                  list known booths")
 	fmt.Println("  booth members <id|name>     show a booth's members")
 	fmt.Println("  booth create <name> <p1,p2> create a booth with the listed members")
@@ -461,7 +563,38 @@ func handleSay(hub *peer.Hub, rest string) {
 	}
 }
 
-func handleFlip(hub *peer.Hub, rest string) {
+func handleFlip(ctx context.Context, hub *peer.Hub, st *store.Store, selfName, rest string) {
+	// flip booth <id|name> <path> — send to every connected booth member
+	if strings.HasPrefix(rest, "booth ") {
+		args := strings.TrimPrefix(rest, "booth ")
+		parts := strings.SplitN(args, " ", 2)
+		if len(parts) < 2 {
+			fmt.Println("usage: flip booth <id|name> <path>")
+			return
+		}
+		booth, ok := findBooth(ctx, st, parts[0])
+		if !ok {
+			return
+		}
+		path := parts[1]
+		members, _ := st.BoothMembers(ctx, booth.ID)
+		delivered := 0
+		for _, m := range members {
+			if m.PeerName == selfName {
+				continue
+			}
+			if hub.Get(m.PeerName) == nil {
+				continue
+			}
+			if _, err := hub.SendFlip(m.PeerName, path); err != nil {
+				fmt.Printf("  %s: %v\n", m.PeerName, err)
+			} else {
+				delivered++
+			}
+		}
+		fmt.Printf("flipped %s to %d/%d members of %q\n", path, delivered, len(members)-1, booth.Name)
+		return
+	}
 	names := hub.Names()
 	if len(names) == 0 {
 		fmt.Println("not connected to any peer; use 'connect <hostname>' first")
@@ -485,7 +618,7 @@ func handleFlip(hub *peer.Hub, rest string) {
 		path = rest
 	}
 	if path == "" {
-		fmt.Println("usage: flip [@<peer>] <path>")
+		fmt.Println("usage: flip [@<peer> | booth <id|name>] <path>")
 		return
 	}
 	id, err := hub.SendFlip(target, path)

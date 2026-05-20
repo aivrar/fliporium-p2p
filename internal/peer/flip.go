@@ -47,26 +47,30 @@ type outgoingFlip struct {
 }
 
 // SendFlip begins streaming localPath to peerName. Returns the generated
-// flip id once FLIP_START has been sent. The actual file transfer happens
-// asynchronously; progress + completion arrive via Hub.Events.
+// flip id once FLIP_START has been sent.
 func (h *Hub) SendFlip(peerName, localPath string) (string, error) {
+	id, err := newFlipID()
+	if err != nil {
+		return "", err
+	}
+	return id, h.SendFlipWithID(peerName, localPath, id)
+}
+
+// SendFlipWithID is like SendFlip but uses a caller-supplied id. Useful for
+// booth-flips where the same logical file goes to many peers with a shared id.
+func (h *Hub) SendFlipWithID(peerName, localPath, id string) error {
 	c := h.Get(peerName)
 	if c == nil {
-		return "", fmt.Errorf("no active connection to %q", peerName)
+		return fmt.Errorf("no active connection to %q", peerName)
 	}
 	f, err := os.Open(localPath)
 	if err != nil {
-		return "", fmt.Errorf("open %s: %w", localPath, err)
+		return fmt.Errorf("open %s: %w", localPath, err)
 	}
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
-		return "", fmt.Errorf("stat %s: %w", localPath, err)
-	}
-	id, err := newFlipID()
-	if err != nil {
-		f.Close()
-		return "", err
+		return fmt.Errorf("stat %s: %w", localPath, err)
 	}
 	base := filepath.Base(localPath)
 	mimeType := mimepkg.TypeByExtension(filepath.Ext(base))
@@ -77,7 +81,7 @@ func (h *Hub) SendFlip(peerName, localPath string) (string, error) {
 	start := FlipStart{ID: id, Filename: base, Size: info.Size(), Mime: mimeType}
 	if err := c.WriteFrame(TypeFlipStart, start); err != nil {
 		f.Close()
-		return "", fmt.Errorf("send FLIP_START: %w", err)
+		return fmt.Errorf("send FLIP_START: %w", err)
 	}
 
 	out := &outgoingFlip{
@@ -107,7 +111,7 @@ func (h *Hub) SendFlip(peerName, localPath string) (string, error) {
 	})
 
 	go h.runOutgoingFlip(c, f, out, start)
-	return id, nil
+	return nil
 }
 
 func (h *Hub) runOutgoingFlip(c *PeerConn, f *os.File, out *outgoingFlip, start FlipStart) {

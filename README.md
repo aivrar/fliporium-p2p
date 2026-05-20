@@ -13,7 +13,8 @@ Headscale tailnet. See `fliporium-brief.md` for the full vision.
 | 4 | Wails desktop UI: The Floor, peer list, 1:1 chat, SQLite history, basic Markdown | done (alpha) |
 | 5 | File flipping + Catch folder + inline image/video/audio/pdf/text viewers | done v0.1 (no resumability, no multi-file, no folder flips) |
 | 6 | Booths (named multi-peer group chat) + mesh fan-out + GUI/CLI surfaces | done v0.1 (no reactions/edit/delete/threads/themes/emoji/search) |
-| 7+ | Showtime, Workshop, Twin Mode, polish | not started |
+| 7 | Showtime: watch-parties / listening-rooms with synced HTML5 playback (leader-led) | done v0.1 wire-level (visual confirmation pending; no voice/video/screen) |
+| 8+ | Workshop, Twin Mode, polish | not started |
 
 ## Layout
 

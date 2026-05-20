@@ -98,6 +98,10 @@ const (
 	EventFlipCompleted HubEventKind = "flip-completed"
 	EventFlipFailed    HubEventKind = "flip-failed"
 	EventBoothInvited  HubEventKind = "booth-invited"
+
+	EventShowtimeStarted HubEventKind = "showtime-started"
+	EventShowtimeState   HubEventKind = "showtime-state"
+	EventShowtimeEnded   HubEventKind = "showtime-ended"
 )
 
 // MessageEventData accompanies EventMessage so the app layer can route by Booth.
@@ -220,6 +224,33 @@ func (h *Hub) SendBoothInvite(peerName string, inv BoothInvite) error {
 	return c.WriteFrame(TypeBoothInvite, inv)
 }
 
+// SendShowtimeStart broadcasts a SHOWTIME_START to one peer.
+func (h *Hub) SendShowtimeStart(peerName string, s ShowtimeStart) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypeShowtimeStart, s)
+}
+
+// SendShowtimeState broadcasts a SHOWTIME_STATE to one peer.
+func (h *Hub) SendShowtimeState(peerName string, s ShowtimeState) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypeShowtimeState, s)
+}
+
+// SendShowtimeEnd broadcasts a SHOWTIME_END to one peer.
+func (h *Hub) SendShowtimeEnd(peerName string, s ShowtimeEnd) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypeShowtimeEnd, s)
+}
+
 // ByeAll sends BYE to every peer and closes their connections.
 func (h *Hub) ByeAll(reason string) {
 	h.mu.RLock()
@@ -291,6 +322,21 @@ func (h *Hub) runLoop(c *PeerConn) {
 			var inv BoothInvite
 			if err := json.Unmarshal(env.Body, &inv); err == nil {
 				h.emit(HubEvent{Kind: EventBoothInvited, Peer: c.Name, Text: inv.Name, Data: &inv})
+			}
+		case TypeShowtimeStart:
+			var s ShowtimeStart
+			if err := json.Unmarshal(env.Body, &s); err == nil {
+				h.emit(HubEvent{Kind: EventShowtimeStarted, Peer: c.Name, Text: s.FlipID, Data: &s})
+			}
+		case TypeShowtimeState:
+			var s ShowtimeState
+			if err := json.Unmarshal(env.Body, &s); err == nil {
+				h.emit(HubEvent{Kind: EventShowtimeState, Peer: c.Name, Data: &s})
+			}
+		case TypeShowtimeEnd:
+			var s ShowtimeEnd
+			if err := json.Unmarshal(env.Body, &s); err == nil {
+				h.emit(HubEvent{Kind: EventShowtimeEnded, Peer: c.Name, Data: &s})
 			}
 		}
 	}

@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const ProtocolVersion = "fliporium/0.6"
+const ProtocolVersion = "fliporium/0.7"
 
 type MessageType string
 
@@ -32,6 +32,11 @@ const (
 
 	// Booths = multi-peer named chat rooms (v0.6).
 	TypeBoothInvite MessageType = "BOOTH_INVITE"
+
+	// Showtime = synchronized media playback in a booth (v0.7).
+	TypeShowtimeStart MessageType = "SHOWTIME_START"
+	TypeShowtimeState MessageType = "SHOWTIME_STATE"
+	TypeShowtimeEnd   MessageType = "SHOWTIME_END"
 )
 
 type Envelope struct {
@@ -59,6 +64,37 @@ type BoothInvite struct {
 	Members   []string  `json:"members"`
 	Motto     string    `json:"motto,omitempty"`
 	FoundedAt time.Time `json:"founded_at"`
+}
+
+// ShowtimeStart announces a new synchronized playback session in a booth.
+// FlipID references a file that's already been flipped to every viewer
+// (use booth-flip to seed it first). Leader is the peer hostname of whoever
+// is broadcasting playback.
+type ShowtimeStart struct {
+	SessionID string    `json:"session_id"`
+	BoothID   string    `json:"booth_id"`
+	FlipID    string    `json:"flip_id"`
+	Leader    string    `json:"leader"`
+	Filename  string    `json:"filename,omitempty"` // hint for receivers that lack the flip
+	Mime      string    `json:"mime,omitempty"`
+	At        time.Time `json:"at"`
+}
+
+// ShowtimeState is the periodic + on-event sync update from the leader.
+// Position is the media currentTime in seconds.
+type ShowtimeState struct {
+	SessionID string    `json:"session_id"`
+	BoothID   string    `json:"booth_id"`
+	Playing   bool      `json:"playing"`
+	Position  float64   `json:"position"`
+	At        time.Time `json:"at"`
+}
+
+// ShowtimeEnd closes a session.
+type ShowtimeEnd struct {
+	SessionID string    `json:"session_id"`
+	BoothID   string    `json:"booth_id"`
+	At        time.Time `json:"at"`
 }
 
 type Bye struct {
