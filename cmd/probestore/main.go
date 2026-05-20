@@ -43,5 +43,16 @@ func main() {
 			}
 			fmt.Printf("  %s  %s  %s  %s\n", m.At.Format("15:04:05"), arrow, m.Peer, m.Text)
 		}
+
+		flips, _ := s.FlipsByPeer(ctx, p.Name)
+		fmt.Printf("== flips with %s (%d) ==\n", p.Name, len(flips))
+		for _, f := range flips {
+			arrow := "<-"
+			if f.Direction == "out" {
+				arrow = "->"
+			}
+			fmt.Printf("  %s  %s  [%s]  %s  %d bytes  status=%s  mime=%s  path=%s\n",
+				f.StartedAt.Format("15:04:05"), arrow, f.ID[:8], f.Filename, f.Size, f.Status, f.Mime, f.Path)
+		}
 	}
 }

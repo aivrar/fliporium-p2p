@@ -38,6 +38,30 @@ type PeerRecord struct {
 	LastSeen  time.Time
 }
 
+// FlipStatus tracks where a transfer is in its lifecycle.
+const (
+	FlipStatusStarted   = "started"
+	FlipStatusReceiving = "receiving"
+	FlipStatusComplete  = "complete"
+	FlipStatusFailed    = "failed"
+	FlipStatusCancelled = "cancelled"
+)
+
+// FlipRecord is a row in the flips table.
+type FlipRecord struct {
+	ID          string
+	Peer        string
+	Direction   string // "in" or "out"
+	Filename    string
+	Size        int64
+	Mime        string
+	Path        string // absolute path on this machine
+	Sha256      string // empty until completed
+	Status      string
+	StartedAt   time.Time
+	CompletedAt time.Time // zero if not yet complete
+}
+
 // Store wraps the SQLite database.
 type Store struct {
 	db *sql.DB
@@ -86,6 +110,22 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_peer_at ON messages(peer, at);
+
+CREATE TABLE IF NOT EXISTS flips (
+    id           TEXT PRIMARY KEY,
+    peer         TEXT NOT NULL,
+    direction    TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+    filename     TEXT NOT NULL,
+    size         INTEGER NOT NULL,
+    mime         TEXT,
+    path         TEXT NOT NULL,
+    sha256       TEXT,
+    status       TEXT NOT NULL,
+    started_at   TEXT NOT NULL,
+    completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_flips_peer_started ON flips(peer, started_at);
 `
 
 func migrate(db *sql.DB) error {
@@ -135,6 +175,105 @@ func (s *Store) AppendMessage(ctx context.Context, peer, direction, text string,
 		INSERT INTO messages (peer, direction, text, at) VALUES (?, ?, ?, ?)
 	`, peer, direction, text, at.UTC().Format(time.RFC3339Nano))
 	return err
+}
+
+// AppendFlip records a brand-new transfer (status = started).
+func (s *Store) AppendFlip(ctx context.Context, f FlipRecord) error {
+	if f.Direction != DirectionIn && f.Direction != DirectionOut {
+		return fmt.Errorf("invalid flip direction %q", f.Direction)
+	}
+	if f.Status == "" {
+		f.Status = FlipStatusStarted
+	}
+	if f.StartedAt.IsZero() {
+		f.StartedAt = time.Now().UTC()
+	}
+	var completedAt *string
+	if !f.CompletedAt.IsZero() {
+		s := f.CompletedAt.UTC().Format(time.RFC3339Nano)
+		completedAt = &s
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO flips (id, peer, direction, filename, size, mime, path, sha256, status, started_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			filename=excluded.filename,
+			size=excluded.size,
+			mime=excluded.mime,
+			path=excluded.path,
+			sha256=excluded.sha256,
+			status=excluded.status,
+			completed_at=excluded.completed_at
+	`,
+		f.ID, f.Peer, f.Direction, f.Filename, f.Size, f.Mime, f.Path, f.Sha256, f.Status,
+		f.StartedAt.UTC().Format(time.RFC3339Nano), completedAt)
+	return err
+}
+
+// UpdateFlipStatus changes the status (and optionally completion fields) of a flip.
+func (s *Store) UpdateFlipStatus(ctx context.Context, id, status, sha256 string, completedAt time.Time) error {
+	var completed *string
+	if !completedAt.IsZero() {
+		s := completedAt.UTC().Format(time.RFC3339Nano)
+		completed = &s
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE flips SET status = ?, sha256 = COALESCE(NULLIF(?, ''), sha256), completed_at = COALESCE(?, completed_at)
+		WHERE id = ?
+	`, status, sha256, completed, id)
+	return err
+}
+
+// FlipsByPeer returns flips with the given peer, oldest first.
+func (s *Store) FlipsByPeer(ctx context.Context, peer string) ([]FlipRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, peer, direction, filename, size, mime, path, sha256, status, started_at, completed_at
+		FROM flips WHERE peer = ? ORDER BY started_at ASC
+	`, peer)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FlipRecord
+	for rows.Next() {
+		var f FlipRecord
+		var mime, sha sql.NullString
+		var startedAt string
+		var completedAt sql.NullString
+		if err := rows.Scan(&f.ID, &f.Peer, &f.Direction, &f.Filename, &f.Size, &mime, &f.Path, &sha, &f.Status, &startedAt, &completedAt); err != nil {
+			return nil, err
+		}
+		f.Mime = mime.String
+		f.Sha256 = sha.String
+		f.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
+		if completedAt.Valid {
+			f.CompletedAt, _ = time.Parse(time.RFC3339Nano, completedAt.String)
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// GetFlip looks up a single flip by id.
+func (s *Store) GetFlip(ctx context.Context, id string) (FlipRecord, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, peer, direction, filename, size, mime, path, sha256, status, started_at, completed_at
+		FROM flips WHERE id = ?
+	`, id)
+	var f FlipRecord
+	var mime, sha sql.NullString
+	var startedAt string
+	var completedAt sql.NullString
+	if err := row.Scan(&f.ID, &f.Peer, &f.Direction, &f.Filename, &f.Size, &mime, &f.Path, &sha, &f.Status, &startedAt, &completedAt); err != nil {
+		return FlipRecord{}, err
+	}
+	f.Mime = mime.String
+	f.Sha256 = sha.String
+	f.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
+	if completedAt.Valid {
+		f.CompletedAt, _ = time.Parse(time.RFC3339Nano, completedAt.String)
+	}
+	return f, nil
 }
 
 // Messages returns the last `limit` messages with a given peer, oldest first.

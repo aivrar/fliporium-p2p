@@ -11,7 +11,8 @@ Headscale tailnet. See `fliporium-brief.md` for the full vision.
 | 2 | tsnet-backed Go binary joins the tailnet, persists identity | done |
 | 3 | Terminal P2P chat (HELLO/MESSAGE/BYE over TLS-on-tsnet) | done |
 | 4 | Wails desktop UI: The Floor, peer list, 1:1 chat, SQLite history, basic Markdown | done (alpha) |
-| 5+ | File flipping, inline viewers, Booths, Showtime, Workshop, Twin Mode, polish | not started |
+| 5 | File flipping + Catch folder + inline image/video/audio/pdf/text viewers | done v0.1 (no resumability, no multi-file, no folder flips) |
+| 6+ | Booths, Showtime, Workshop, Twin Mode, polish | not started |
 
 ## Layout
 
@@ -107,6 +108,31 @@ go run .\cmd\probestore .\fliporium-data-flip-gui
 - Frontend is plain HTML + CSS + a single `main.js`; no build chain. Markdown
   rendering is an in-house ~50-line escape-then-transform renderer.
 
+## Flipping files (Phase 5)
+
+Drag any file onto the Fliporium window while a peer is selected and connected,
+or click the **flip** button to pick from a dialog. The file streams over the
+peer connection (chunked, JSON-wrapped, ~64 KB per chunk), is sha256-verified
+on arrival, and lands in `<dataDir>/catch/<peer>/<filename>`.
+
+Inline viewers (auto-selected by MIME):
+
+- images (jpg/png/gif/webp/svg/avif/...)
+- video (mp4/webm/...)
+- audio (mp3/wav/ogg/flac/...)
+- PDF (via WebView2's native viewer)
+- text/code (md/txt/json/go/py/...; truncated above 8 KB with "open" button)
+
+Everything else gets a download card with an **open** button that hands the file
+to the OS default application.
+
+CLI equivalents (in `.\run.ps1 -Cli`):
+
+```
+flip <path>             # send to the only open peer
+flip @<peer> <path>     # send to a specific peer
+```
+
 ## Known caveats (will be tightened in later phases)
 
 - Outbound message path from GUI is implemented but not yet visually verified.
@@ -114,4 +140,6 @@ go run .\cmd\probestore .\fliporium-data-flip-gui
   identity is left to Tailscale. A future phase will pin Tailscale node keys.
 - No retry on disconnect; if a peer drops, you have to click `connect` again.
 - Single Booth (everyone is just "a peer"); Phase 6 introduces real Booths.
-- No file flipping yet (Phase 5).
+- Flip MVP limitations: no resumability, no multi-file flips, no folder flips,
+  no pause/cancel. Big files load fully into memory per chunk because we wrap
+  chunks in JSON+base64 — a future binary-framing change fixes that.

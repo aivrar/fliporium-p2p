@@ -89,17 +89,35 @@ func (c *PeerConn) Close() {
 type HubEventKind string
 
 const (
-	EventConnect    HubEventKind = "connect"
-	EventDisconnect HubEventKind = "disconnect"
-	EventMessage    HubEventKind = "message"
-	EventInfo       HubEventKind = "info"
+	EventConnect       HubEventKind = "connect"
+	EventDisconnect    HubEventKind = "disconnect"
+	EventMessage       HubEventKind = "message"
+	EventInfo          HubEventKind = "info"
+	EventFlipStarted   HubEventKind = "flip-started"
+	EventFlipProgress  HubEventKind = "flip-progress"
+	EventFlipCompleted HubEventKind = "flip-completed"
+	EventFlipFailed    HubEventKind = "flip-failed"
 )
+
+// FlipEventData is the structured payload attached to Event Flip* events.
+type FlipEventData struct {
+	ID        string
+	Direction string // "in" or "out"
+	Filename  string
+	Size      int64
+	Mime      string
+	Path      string // absolute local path (where we wrote, or where we read)
+	Bytes     int64  // total transferred so far
+	Sha256    string
+	Reason    string // for FlipFailed
+}
 
 // HubEvent is a single async event to surface to the UI.
 type HubEvent struct {
 	Kind HubEventKind
 	Peer string
 	Text string
+	Data any // typed payload (e.g. *FlipEventData)
 	At   time.Time
 }
 
@@ -108,12 +126,23 @@ type Hub struct {
 	mu     sync.RWMutex
 	conns  map[string]*PeerConn
 	Events chan HubEvent
+
+	// CatchRoot is the directory inbound flips are written into.
+	// Files land at CatchRoot/<peer-name>/<filename>. Must be set before any
+	// inbound flip can succeed; if empty, inbound flips are rejected.
+	CatchRoot string
+
+	flipMu   sync.Mutex
+	inFlips  map[string]*incomingFlip
+	outFlips map[string]*outgoingFlip
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		conns:  map[string]*PeerConn{},
-		Events: make(chan HubEvent, 64),
+		conns:    map[string]*PeerConn{},
+		Events:   make(chan HubEvent, 64),
+		inFlips:  map[string]*incomingFlip{},
+		outFlips: map[string]*outgoingFlip{},
 	}
 }
 
@@ -212,6 +241,26 @@ func (h *Hub) runLoop(c *PeerConn) {
 			return
 		case TypeHello:
 			// extra HELLO post-handshake — ignore
+		case TypeFlipStart:
+			var s FlipStart
+			if err := json.Unmarshal(env.Body, &s); err == nil {
+				h.handleFlipStart(c.Name, s)
+			}
+		case TypeFlipChunk:
+			var ch FlipChunk
+			if err := json.Unmarshal(env.Body, &ch); err == nil {
+				h.handleFlipChunk(c.Name, ch)
+			}
+		case TypeFlipEnd:
+			var e FlipEnd
+			if err := json.Unmarshal(env.Body, &e); err == nil {
+				h.handleFlipEnd(c.Name, e)
+			}
+		case TypeFlipReject:
+			var r FlipReject
+			if err := json.Unmarshal(env.Body, &r); err == nil {
+				h.handleFlipReject(c.Name, r)
+			}
 		}
 	}
 }

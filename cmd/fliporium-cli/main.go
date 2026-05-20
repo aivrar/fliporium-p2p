@@ -11,6 +11,8 @@
 //	FLIPORIUM_AUTOPEER  — optional MagicDNS name to auto-connect on startup.
 //	FLIPORIUM_AUTOSAY   — optional text; sent to each auto-peered connection
 //	                      after the HELLO completes. Handy for scripted tests.
+//	FLIPORIUM_AUTOFLIP  — optional file path; flipped to each auto-peered peer
+//	                      after the HELLO completes. Handy for scripted tests.
 //	FLIPORIUM_HEADLESS  — when set, skip the interactive REPL and just run as
 //	                      a listening peer until SIGINT. Used by scripted tests.
 //	FLIPORIUM_AUTOQUIT_SECONDS
@@ -26,6 +28,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,6 +98,7 @@ func main() {
 	}
 
 	hub := peer.NewHub()
+	hub.CatchRoot = filepath.Join(dir, "catch")
 
 	listenAddr := fmt.Sprintf(":%d", peer.Port)
 	ln, err := srv.Listen("tcp", listenAddr)
@@ -132,6 +136,7 @@ func main() {
 
 	if autoPeer != "" {
 		autoSay := os.Getenv("FLIPORIUM_AUTOSAY")
+		autoFlip := os.Getenv("FLIPORIUM_AUTOFLIP")
 		go func() {
 			dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
 			defer dialCancel()
@@ -143,6 +148,14 @@ func main() {
 				time.Sleep(500 * time.Millisecond)
 				for _, name := range hub.Names() {
 					_ = hub.Send(name, autoSay)
+				}
+			}
+			if autoFlip != "" {
+				time.Sleep(500 * time.Millisecond)
+				for _, name := range hub.Names() {
+					if _, err := hub.SendFlip(name, autoFlip); err != nil {
+						fmt.Fprintf(os.Stderr, "autoflip %s: %v\n", autoFlip, err)
+					}
 				}
 			}
 		}()
@@ -195,6 +208,21 @@ func displayEvents(events <-chan peer.HubEvent) {
 			fmt.Printf("\r\033[K[%s] *** %s disconnected\n> ", ts, ev.Peer)
 		case peer.EventInfo:
 			fmt.Printf("\r\033[K[%s] info: %s\n> ", ts, ev.Text)
+		case peer.EventFlipStarted:
+			fd, _ := ev.Data.(*peer.FlipEventData)
+			if fd != nil {
+				fmt.Printf("\r\033[K[%s] flip %s %s %s (%d bytes)\n> ", ts, fd.Direction, fd.Filename, fd.ID[:8], fd.Size)
+			}
+		case peer.EventFlipCompleted:
+			fd, _ := ev.Data.(*peer.FlipEventData)
+			if fd != nil {
+				fmt.Printf("\r\033[K[%s] flip done %s %s -> %s\n> ", ts, fd.Direction, fd.Filename, fd.Path)
+			}
+		case peer.EventFlipFailed:
+			fd, _ := ev.Data.(*peer.FlipEventData)
+			if fd != nil {
+				fmt.Printf("\r\033[K[%s] flip FAILED %s %s: %s\n> ", ts, fd.Direction, fd.Filename, fd.Reason)
+			}
 		}
 	}
 }
@@ -238,6 +266,8 @@ func runREPL(ctx context.Context, srv *tsnet.Server, hub *peer.Hub, tlsCfg *tls.
 			}
 		case "say", "msg":
 			handleSay(hub, rest)
+		case "flip":
+			handleFlip(hub, rest)
 		case "disconnect":
 			handleDisconnect(hub, rest)
 		case "quit", "exit":
@@ -264,6 +294,8 @@ func printHelp() {
 	fmt.Println("  connect <hostname>          dial peer (e.g. fliporium-node2)")
 	fmt.Println("  say <text>                  send to the only open peer (or use @peer)")
 	fmt.Println("  say @<peer> <text>          send to a specific peer")
+	fmt.Println("  flip <path>                 send a file to the only open peer")
+	fmt.Println("  flip @<peer> <path>         send a file to a specific peer")
 	fmt.Println("  disconnect [<peer>]         close one or the only open peer")
 	fmt.Println("  quit                        BYE all peers and exit")
 }
@@ -318,6 +350,41 @@ func handleSay(hub *peer.Hub, rest string) {
 	if err := hub.Send(target, text); err != nil {
 		fmt.Println("send:", err)
 	}
+}
+
+func handleFlip(hub *peer.Hub, rest string) {
+	names := hub.Names()
+	if len(names) == 0 {
+		fmt.Println("not connected to any peer; use 'connect <hostname>' first")
+		return
+	}
+	var target, path string
+	if strings.HasPrefix(rest, "@") {
+		parts := strings.SplitN(rest[1:], " ", 2)
+		if len(parts) < 2 {
+			fmt.Println("usage: flip @<peer> <path>")
+			return
+		}
+		target = parts[0]
+		path = parts[1]
+	} else {
+		if len(names) > 1 {
+			fmt.Println("multiple peers connected; use 'flip @<peer> <path>'")
+			return
+		}
+		target = names[0]
+		path = rest
+	}
+	if path == "" {
+		fmt.Println("usage: flip [@<peer>] <path>")
+		return
+	}
+	id, err := hub.SendFlip(target, path)
+	if err != nil {
+		fmt.Println("flip:", err)
+		return
+	}
+	fmt.Printf("started flip %s -> %s (id=%s)\n", path, target, id[:8])
 }
 
 func handleDisconnect(hub *peer.Hub, rest string) {
