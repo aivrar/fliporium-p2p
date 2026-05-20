@@ -180,6 +180,20 @@ CREATE TABLE IF NOT EXISTS message_reactions (
 );
 CREATE INDEX IF NOT EXISTS idx_reactions_message ON message_reactions(message_uuid);
 
+-- Full-text search over message text. Contentless mode so we control sync.
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(text, content='messages', content_rowid='id');
+
+CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
+    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+END;
+
 CREATE TABLE IF NOT EXISTS booths (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
@@ -244,6 +258,16 @@ func migrate(db *sql.DB) error {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return fmt.Errorf("migrate %q: %w", stmt, err)
 		}
+	}
+	// Backfill the FTS index from any pre-existing messages that aren't
+	// already indexed (only matters when upgrading a pre-FTS store; on a fresh
+	// store messages_fts and messages are both empty).
+	if _, err := db.Exec(`
+		INSERT INTO messages_fts(rowid, text)
+		SELECT id, text FROM messages
+		WHERE NOT EXISTS (SELECT 1 FROM messages_fts WHERE rowid = messages.id)
+	`); err != nil {
+		return fmt.Errorf("backfill messages_fts: %w", err)
 	}
 	return nil
 }
@@ -424,6 +448,58 @@ func (s *Store) ReactionsForMessages(ctx context.Context, uuids []string) (map[s
 		}
 		r.At, _ = time.Parse(time.RFC3339Nano, atStr)
 		out[r.MessageUUID] = append(out[r.MessageUUID], r)
+	}
+	return out, rows.Err()
+}
+
+// SearchHit is one full-text result with snippet highlighting context.
+type SearchHit struct {
+	Message Message
+	Snippet string // text fragment with the matching tokens
+}
+
+// SearchMessages does a full-text search over message bodies, ranked by FTS5's
+// bm25 algorithm. Excludes tombstoned messages.
+func (s *Store) SearchMessages(ctx context.Context, query string, limit int) ([]SearchHit, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT m.id, COALESCE(m.uuid,''), m.peer, m.direction, m.text, m.at,
+		       COALESCE(m.booth_id,''), COALESCE(m.parent_uuid,''),
+		       COALESCE(m.edited_at,''), COALESCE(m.deleted_at,''), COALESCE(m.pinned, 0),
+		       snippet(messages_fts, 0, '<mark>', '</mark>', '...', 12)
+		FROM messages_fts
+		JOIN messages m ON m.id = messages_fts.rowid
+		WHERE messages_fts MATCH ? AND m.deleted_at IS NULL
+		ORDER BY bm25(messages_fts)
+		LIMIT ?
+	`, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SearchHit
+	for rows.Next() {
+		var m Message
+		var atStr, editedStr, deletedStr, snippet string
+		var pinnedInt int
+		if err := rows.Scan(&m.ID, &m.UUID, &m.Peer, &m.Direction, &m.Text, &atStr,
+			&m.BoothID, &m.ParentUUID, &editedStr, &deletedStr, &pinnedInt, &snippet); err != nil {
+			return nil, err
+		}
+		m.At, _ = time.Parse(time.RFC3339Nano, atStr)
+		if editedStr != "" {
+			m.EditedAt, _ = time.Parse(time.RFC3339Nano, editedStr)
+		}
+		if deletedStr != "" {
+			m.DeletedAt, _ = time.Parse(time.RFC3339Nano, deletedStr)
+		}
+		m.Pinned = pinnedInt != 0
+		out = append(out, SearchHit{Message: m, Snippet: snippet})
 	}
 	return out, rows.Err()
 }

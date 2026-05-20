@@ -845,6 +845,75 @@ async function paintBackstage() {
     $("bs-twin-current").textContent = currentTwin ? ("currently paired with " + currentTwin) : "not paired";
 }
 
+// ---------- search ----------
+
+let searchDebounce = null;
+function bindSearch() {
+    const input = $("search-input");
+    const results = $("search-results");
+    input.addEventListener("input", () => {
+        clearTimeout(searchDebounce);
+        const q = input.value.trim();
+        if (q.length < 2) { results.classList.add("hidden"); results.innerHTML = ""; return; }
+        searchDebounce = setTimeout(async () => {
+            try {
+                const hits = await window.go.main.App.SearchMessages(q, 30);
+                renderSearchResults(hits || []);
+            } catch (e) {
+                results.innerHTML = `<div class="search-empty">search: ${escapeAttr(String(e))}</div>`;
+                results.classList.remove("hidden");
+            }
+        }, 200);
+    });
+    document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+            e.preventDefault();
+            input.focus();
+            input.select();
+        } else if (e.key === "Escape" && document.activeElement === input) {
+            input.value = "";
+            results.classList.add("hidden");
+            input.blur();
+        }
+    });
+    document.addEventListener("click", (e) => {
+        if (!results.classList.contains("hidden") && !results.contains(e.target) && e.target !== input) {
+            results.classList.add("hidden");
+        }
+    });
+}
+
+function renderSearchResults(hits) {
+    const results = $("search-results");
+    if (hits.length === 0) {
+        results.innerHTML = `<div class="search-empty">no matches</div>`;
+        results.classList.remove("hidden");
+        return;
+    }
+    results.innerHTML = "";
+    for (const h of hits) {
+        const div = document.createElement("div");
+        div.className = "search-hit";
+        const where = h.boothId
+            ? `Booth · ${escapeAttr((state.booths.find(b => b.id === h.boothId)?.name) || h.boothId.slice(0, 8))}`
+            : (h.direction === "out" ? `to ${escapeAttr(h.peer)}` : `from ${escapeAttr(h.peer)}`);
+        const when = shortTime(h.at);
+        div.innerHTML = `
+            <div class="where">${where} · ${escapeAttr(when)}</div>
+            <div class="snippet">${h.snippet || escapeAttr((h.text || "").slice(0, 120))}</div>
+        `;
+        div.addEventListener("click", () => {
+            $("search-results").classList.add("hidden");
+            $("search-input").value = "";
+            if (h.boothId) selectBooth(h.boothId);
+            else if (h.peer) selectPeer(h.peer);
+            if (h.uuid) setTimeout(() => jumpToMessage(h.uuid), 250);
+        });
+        results.appendChild(div);
+    }
+    results.classList.remove("hidden");
+}
+
 function bindBackstage() {
     $("backstageBtn").addEventListener("click", openBackstage);
     $("bs-close").addEventListener("click", closeBackstage);
@@ -1241,6 +1310,7 @@ async function boot() {
     await loadTheme();
     bindComposer();
     bindNotepad();
+    bindSearch();
     bindBackstage();
     bindTour();
     bindDragDrop();

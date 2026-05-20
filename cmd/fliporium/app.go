@@ -1186,6 +1186,44 @@ func (a *App) SendShowtimeState(sessionID, boothID string, playing bool, positio
 	return nil
 }
 
+// ---------- search ----------
+
+// SearchHitRecord is one full-text result surfaced to the frontend.
+type SearchHitRecord struct {
+	UUID      string `json:"uuid,omitempty"`
+	Peer      string `json:"peer"`
+	Direction string `json:"direction"`
+	Text      string `json:"text"`
+	Snippet   string `json:"snippet"` // contains <mark>...</mark> highlights
+	At        string `json:"at"`
+	BoothID   string `json:"boothId,omitempty"`
+}
+
+// SearchMessages returns FTS5-ranked matches for the query string.
+// Pass a limit <= 0 for the default cap.
+func (a *App) SearchMessages(query string, limit int) ([]SearchHitRecord, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("store not ready")
+	}
+	hits, err := a.store.SearchMessages(a.ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SearchHitRecord, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, SearchHitRecord{
+			UUID:      h.Message.UUID,
+			Peer:      h.Message.Peer,
+			Direction: h.Message.Direction,
+			Text:      h.Message.Text,
+			Snippet:   h.Snippet,
+			At:        h.Message.At.UTC().Format(time.RFC3339Nano),
+			BoothID:   h.Message.BoothID,
+		})
+	}
+	return out, nil
+}
+
 // ---------- generic preferences (used by Backstage / tour / confetti) ----------
 
 // GetPref returns the value for a settings key, or "" if unset.
