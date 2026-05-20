@@ -39,6 +39,9 @@ coverage.out
 .idea/
 *.swp
 
+# Playwright preview / dev artifacts
+.playwright-mcp/
+
 # Stray captured streams from debugging
 stdout.log
 stderr.log

@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Docs — Fliporium</title>
+<meta name="description" content="Everything you need to know about using Fliporium — how to install, invite friends, use Booths, flip files, watch together, and keep your stuff private.">
+<meta name="theme-color" content="#131318">
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topnav">
+    <a href="/" class="brand">
+        <img src="/logo.svg" alt="" width="32" height="32">
+        <span>Fliporium</span>
+    </a>
+    <nav>
+        <a href="/docs" aria-current="page">Docs</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/stats">Stats</a>
+    </nav>
+</header>
+
+<main>
+
+<div class="page-title">
+    <h1>Docs</h1>
+    <p>Everything you need to know, and not a word more than that.</p>
+</div>
+
+<article class="doc">
+
+<div class="toc">
+    <strong>On this page</strong>
+    <ul>
+        <li><a href="#install">Install &amp; first run</a></li>
+        <li><a href="#vocabulary">Vocabulary</a></li>
+        <li><a href="#invite">Invite a friend</a></li>
+        <li><a href="#chat">Chatting one-to-one</a></li>
+        <li><a href="#booths">Booths</a></li>
+        <li><a href="#flips">Flipping files</a></li>
+        <li><a href="#showtime">Showtime (watch together)</a></li>
+        <li><a href="#twin">Twin mode (same person, two devices)</a></li>
+        <li><a href="#search">Search</a></li>
+        <li><a href="#backstage">Backstage (settings)</a></li>
+        <li><a href="#privacy">What we can &amp; can't see</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#faq">FAQ</a></li>
+    </ul>
+</div>
+
+<h2 id="install">Install &amp; first run</h2>
+<p>
+    There's nothing to install. <a href="/dl/fliporium.exe">Download <code>fliporium.exe</code></a>,
+    put it somewhere — your Desktop, a folder you like, a USB stick — and
+    double-click it.
+</p>
+<p>
+    The first time you run it:
+</p>
+<ul>
+    <li>A short three-card <strong>Welcome tour</strong> appears.</li>
+    <li>Behind the scenes, your device generates a private key, joins the Fliporium tailnet, and gets a name like <code>your-hostname</code>.</li>
+    <li>A folder called <code>fliporium-data</code> appears next to the <code>.exe</code>. That's your local chat history, identity, and any files you've caught. Don't delete it unless you want to start over.</li>
+</ul>
+<p>
+    Fliporium runs on Windows 10 and 11. It uses the same WebView2 runtime that
+    ships with the system, so there's nothing extra to install.
+</p>
+
+<h2 id="vocabulary">Vocabulary</h2>
+<p>
+    Fliporium uses a small set of words to describe small things. Don't worry,
+    nothing is gatekept by it — the words just make conversations easier.
+</p>
+<dl>
+    <dt>The Floor</dt>
+    <dd>The home view. The list of people and booths visible to you, plus your composer at the bottom.</dd>
+    <dt>Marquee</dt>
+    <dd>The top strip. Brand on the left, your own info and Backstage on the right.</dd>
+    <dt>Booth</dt>
+    <dd>A small group room. You pick who's in it. Has its own shared notepad and watch-party slot.</dd>
+    <dt>Flip</dt>
+    <dd>To send a file. &ldquo;Flip me that picture&rdquo; = drag-and-drop or use the <em>flip</em> button.</dd>
+    <dt>Catch</dt>
+    <dd>To receive a flipped file. The file lands in your <code>fliporium-data/inbox/</code> folder; click the file in chat to open it.</dd>
+    <dt>Showtime</dt>
+    <dd>A synchronized watch-party inside a booth. Whoever started it is the leader; everyone else syncs to their play/pause.</dd>
+    <dt>Backstage</dt>
+    <dd>Your settings drawer. Theme, sounds, twin pairing, invites, danger zone.</dd>
+    <dt>Twin</dt>
+    <dd>Another of your own devices, paired so 1:1 chats stay in sync across both.</dd>
+</dl>
+
+<h2 id="invite">Invite a friend</h2>
+<p>
+    Inviting someone is a one-time thing. Once they're on your tailnet, they
+    show up on your Floor and stay there.
+</p>
+<ol>
+    <li>Open <strong>Backstage</strong> (top-right of the app) → <em>Invite a friend</em>.</li>
+    <li>Paste a fresh Headscale pre-auth key in the input. (You'll have this if you set up the control server yourself, or someone running the tailnet will give it to you.)</li>
+    <li>Click <strong>QR</strong>. A QR code appears.</li>
+    <li>Your friend opens their phone camera at the screen, scans the code, follows the prompt.</li>
+    <li>They download <code>fliporium.exe</code> from <a href="https://fliporium.com">fliporium.com</a>, run it, and within seconds they're on your Floor.</li>
+</ol>
+<blockquote>
+    Pre-auth keys are single-use by default for a reason: they grant tailnet
+    access. Don't paste one into a screenshot, a public chat, or a video stream.
+    Generate a fresh one per invite.
+</blockquote>
+
+<h2 id="chat">Chatting one-to-one</h2>
+<p>
+    Click a name on the Floor to open a 1:1 conversation. Type at the bottom
+    and press <kbd>Enter</kbd> to send.
+</p>
+
+<h3>Markdown works</h3>
+<ul>
+    <li><code>**bold**</code> → <strong>bold</strong></li>
+    <li><code>*italic*</code> → <em>italic</em></li>
+    <li><code>`code`</code> → <code>code</code></li>
+    <li>Multi-line code fences (<code>```</code>) work too</li>
+    <li>Links are clickable</li>
+</ul>
+
+<h3>On any message, hover to reveal a small toolbar</h3>
+<ul>
+    <li><strong>React</strong> with an emoji (👍 ❤️ 😂 🎉 🔥 🙏)</li>
+    <li><strong>Reply</strong> — your next message threads to that one</li>
+    <li><strong>Edit</strong> — fix a typo (only your own messages, of course)</li>
+    <li><strong>Delete</strong> — withdraw a message (only your own)</li>
+    <li><strong>Pin</strong> — pin one message at the top of the conversation</li>
+</ul>
+
+<h2 id="booths">Booths</h2>
+<p>
+    A booth is a group chat for a small set of people. Click <strong>+</strong>
+    next to <em>Booths</em> on the Floor, name it, pick members, and you're in.
+</p>
+<p>
+    Each booth has:
+</p>
+<ul>
+    <li>Its own message history</li>
+    <li>A <strong>shared notepad</strong> — anyone in the booth can edit, everyone sees the changes in real time</li>
+    <li>A <strong>Showtime</strong> slot for watching a video together</li>
+</ul>
+<p>
+    Inviting a new member to an existing booth: open the booth, type
+    <code>/invite hostname</code>. They'll get a notification and appear in the
+    booth's member list.
+</p>
+
+<h2 id="flips">Flipping files</h2>
+<p>
+    Drag any file from your file explorer onto an open conversation. That's it.
+    The file is transmitted directly between devices, chunked over the
+    encrypted tailnet, and lands on the other person's disk.
+</p>
+<ul>
+    <li>There's no size limit baked into Fliporium itself — the bottleneck is the slower side's bandwidth.</li>
+    <li>Caught files are saved under <code>fliporium-data/inbox/</code>.</li>
+    <li>Click a flipped file in chat to open it with whatever app Windows uses for that file type.</li>
+    <li>Drag a file onto a booth instead of a peer to flip it to everyone in the booth at once.</li>
+</ul>
+
+<h2 id="showtime">Showtime (watch together)</h2>
+<p>
+    Inside a booth, flip a video file. Once it lands on everyone's disk, click
+    <strong>Start Showtime</strong> at the top of the booth. A video player
+    appears for everyone.
+</p>
+<ul>
+    <li>Whoever pressed Start is the <strong>leader</strong>.</li>
+    <li>When the leader pauses, everyone pauses.</li>
+    <li>When the leader seeks, everyone seeks within a one-second tolerance.</li>
+    <li>Anyone can <strong>End Showtime</strong> at any time.</li>
+</ul>
+
+<h2 id="twin">Twin mode (same person, two devices)</h2>
+<p>
+    If you use Fliporium on, say, your laptop and your desktop, you can pair
+    them as twins. Twinned devices automatically sync 1:1 chat history and
+    flipped files between themselves, so it doesn't matter which one you sit
+    down at.
+</p>
+<ol>
+    <li>On device A, open <strong>Backstage → Twin Mode</strong>, type the hostname of device B, save.</li>
+    <li>Do the mirror on device B (twin to device A).</li>
+    <li>From then on, anything you send or receive on one is replayed to the other.</li>
+</ol>
+
+<h2 id="search">Search</h2>
+<p>
+    Hit <kbd>Ctrl + K</kbd> from anywhere in the app to open the search panel.
+    Type at least two characters; Fliporium full-text searches every message
+    you've ever sent or received, across every peer and every booth, and ranks
+    results by relevance. Click a result to jump to that message in context.
+</p>
+
+<h2 id="backstage">Backstage (settings)</h2>
+<dl>
+    <dt>Theme</dt>
+    <dd>Dark (default) or Light. Picks up your OS preference on first run.</dd>
+    <dt>Sounds</dt>
+    <dd>A short chime when a message arrives in a chat that isn't currently focused.</dd>
+    <dt>Twin Mode</dt>
+    <dd>Pair another of your devices. See <a href="#twin">above</a>.</dd>
+    <dt>Invite a friend</dt>
+    <dd>Generate a QR code from a pre-auth key.</dd>
+    <dt>Help</dt>
+    <dd>Replay the Welcome tour anytime.</dd>
+    <dt>Danger zone — Burn Everything</dt>
+    <dd>Type <code>burn everything</code> and confirm to wipe this device's identity, chat history, flipped files, and settings. Other peers' copies are untouched. There is no undo.</dd>
+</dl>
+
+<h2 id="privacy">What we can &amp; can't see</h2>
+<p>What we <em>can</em> see, because we run the tailnet's control server:</p>
+<ul>
+    <li>How many devices have ever joined.</li>
+    <li>How many are signed in right now.</li>
+    <li>That a given device pinged the server (necessary to introduce peers to each other).</li>
+</ul>
+<p>What we <em>cannot</em> see, ever:</p>
+<ul>
+    <li>Who you messaged.</li>
+    <li>What you said.</li>
+    <li>What files you flipped.</li>
+    <li>What you watched in Showtime.</li>
+    <li>Your shared notepad contents.</li>
+</ul>
+<p>
+    Everything in the &ldquo;cannot see&rdquo; list is end-to-end encrypted by
+    WireGuard between your devices. It doesn't route through our server. We
+    couldn't read it even if we wanted to. There is more in
+    <a href="/privacy">our full Privacy statement</a>.
+</p>
+
+<h2 id="troubleshooting">Troubleshooting</h2>
+
+<h3>Fliporium opens but says &ldquo;starting…&rdquo; forever</h3>
+<p>
+    The app couldn't reach the Headscale control server. Check your internet.
+    Look in <code>fliporium-data/fliporium.log</code> next to the .exe — the
+    last few lines usually say why.
+</p>
+
+<h3>Someone is on my Floor but their dot is grey</h3>
+<p>
+    They're known to the tailnet but offline right now. As soon as they open
+    their Fliporium and connect, the dot will turn green.
+</p>
+
+<h3>I dragged a file onto a peer and nothing happened</h3>
+<p>
+    Make sure they're online (green dot). Files only flip between connected
+    peers. If they're offline, the flip will sit queued and complete when they
+    reconnect.
+</p>
+
+<h3>I want to start fresh on this machine</h3>
+<p>
+    Backstage → Danger zone → Burn Everything. Or close the app and delete the
+    <code>fliporium-data</code> folder.
+</p>
+
+<h2 id="faq">FAQ</h2>
+
+<h3>Is this open source?</h3>
+<p>
+    The source lives in a private repository today. If there's interest, we'll
+    open it.
+</p>
+
+<h3>Does Fliporium work on macOS or Linux?</h3>
+<p>
+    Not yet. Windows is the v1 platform. The underlying networking is
+    cross-platform, so other targets are technically possible.
+</p>
+
+<h3>Does it work on phones?</h3>
+<p>
+    Not yet. A mobile companion is a longer-term thought.
+</p>
+
+<h3>What happens if the Headscale server goes offline?</h3>
+<p>
+    Existing peers stay connected to each other (they've already exchanged
+    keys). New peers won't be able to join until it's back. Routine
+    introductions also pause. The control server's job is matchmaking, not
+    traffic.
+</p>
+
+<h3>Can two Fliporium users on the same Wi-Fi chat without the internet?</h3>
+<p>
+    Only if they've already paired through the control server at some point.
+    After that initial handshake, two peers on the same LAN talk directly over
+    the LAN, no internet hop required.
+</p>
+
+<h3>Can I run my own Headscale and use my own Fliporium?</h3>
+<p>
+    Yes. Fliporium is designed around a small, self-hostable control server.
+    If you want to run your own friends-and-family deployment, get in touch.
+</p>
+
+</article>
+
+</main>
+
+<footer class="sitefoot">
+    <div class="foot-inner">
+        <a href="/" class="brand">
+            <img src="/logo.svg" alt="" width="24" height="24">
+            <span>Fliporium</span>
+        </a>
+        <nav>
+            <a href="/docs">Docs</a>
+            <a href="/privacy">Privacy</a>
+            <a href="/stats">Stats</a>
+        </nav>
+        <p class="foot-line">
+            Built with care. No ads, no trackers, no analytics scripts on this page.
+        </p>
+    </div>
+</footer>
+
+</body>
+</html>

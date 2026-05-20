@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fliporium — friends, files, and side-by-side things</title>
+<meta name="description" content="A small private desktop hangout app for you and a handful of people you actually care about. No accounts. No tracking. No servers between you.">
+<meta name="theme-color" content="#131318">
+<meta property="og:title" content="Fliporium">
+<meta property="og:description" content="A small private desktop hangout for you and the people you care about. No accounts. No tracking.">
+<meta property="og:image" content="/og.png">
+<meta property="og:url" content="https://fliporium.com">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico">
+<link rel="apple-touch-icon" href="/icon-256.png">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topnav">
+    <a href="/" class="brand">
+        <img src="/logo.svg" alt="" width="32" height="32">
+        <span>Fliporium</span>
+    </a>
+    <nav>
+        <a href="/docs">Docs</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/stats">Stats</a>
+    </nav>
+</header>
+
+<main>
+
+<section class="hero">
+    <div class="hero-stripes" aria-hidden="true"></div>
+    <div class="hero-inner">
+        <img src="/logo.svg" alt="Fliporium" width="160" height="160" class="hero-mark">
+        <h1>Fliporium</h1>
+        <p class="tagline">
+            Friends, files, and side-by-side things, <br>
+            over a private little tailnet of your own.
+        </p>
+        <div class="hero-cta">
+            <a class="btn btn-primary" href="/dl/fliporium.exe">
+                <span>Download for Windows</span>
+                <small>~ 34 MB · portable .exe</small>
+            </a>
+            <a class="btn btn-ghost" href="/docs">Read the docs →</a>
+        </div>
+        <p class="hero-fineprint">
+            Windows 10 / 11 · no install, no account, no signup
+        </p>
+    </div>
+</section>
+
+<section class="prose">
+    <h2>What it is</h2>
+    <p>
+        Fliporium is a small desktop hangout for you and the handful of people
+        you actually care about. It runs as one portable <code>.exe</code> on
+        Windows — drop it on a USB stick if you want; identity and chat history
+        travel with the file.
+    </p>
+    <p>
+        There's no signup. No account. No central server reading your messages.
+        Fliporium peers find each other over a private
+        <a href="https://tailscale.com/kb/1151/what-is-tailscale" target="_blank" rel="noopener">tailnet</a>
+        and talk directly, encrypted end-to-end by WireGuard. The only public
+        infrastructure is the control plane that introduces peers to each other —
+        and it never sees a single message.
+    </p>
+</section>
+
+<section class="features">
+    <h2>Six little things you can do here</h2>
+    <div class="feature-grid">
+
+        <article class="feature">
+            <div class="feature-icon" aria-hidden="true">🎪</div>
+            <h3>The Floor</h3>
+            <p>Open the app and see who's around. A short list of people, lit up in green if they're online right now.</p>
+        </article>
+
+        <article class="feature">
+            <div class="feature-icon" aria-hidden="true">🪑</div>
+            <h3>Booths</h3>
+            <p>Pull a few people into a private corner for a group chat. Each booth has its own little shared notepad.</p>
+        </article>
+
+        <article class="feature">
+            <div class="feature-icon" aria-hidden="true">📂</div>
+            <h3>Flip a file</h3>
+            <p>Drag a photo, a PDF, a song — anything — onto a friend's name. It zips over the wire and lands on their disk.</p>
+        </article>
+
+        <article class="feature">
+            <div class="feature-icon" aria-hidden="true">🎬</div>
+            <h3>Showtime</h3>
+            <p>Start a video inside a booth and everyone watches together, in sync. Pause for snacks, resume on the same frame.</p>
+        </article>
+
+        <article class="feature">
+            <div class="feature-icon" aria-hidden="true">🎟️</div>
+            <h3>Invite a friend</h3>
+            <p>Backstage → Invite → QR code. They scan it on their phone, sign in once, and they're on your Floor.</p>
+        </article>
+
+        <article class="feature">
+            <div class="feature-icon" aria-hidden="true">🔒</div>
+            <h3>Yours, end to end</h3>
+            <p>Chats, files, video — all directly between devices. We can't read them. We can't even see they happened.</p>
+        </article>
+
+    </div>
+</section>
+
+<section class="prose privacy-promise">
+    <h2>Privacy isn't a feature</h2>
+    <p>
+        Most chat apps are a way for a company to sit between you and your
+        friends. Fliporium isn't a company. It's just an app.
+    </p>
+    <p>
+        The server we run does one job: introduce two peers so they can find
+        each other. After that, your devices speak directly. The server never
+        sees the connection. We don't keep logs of who you talk to, we don't
+        scan files, we don't have an &ldquo;ML team&rdquo;, and we don't have
+        ads to sell.
+    </p>
+    <p>
+        We <em>do</em> count how many times the <code>.exe</code> has been
+        downloaded, and how many people are currently signed into the tailnet,
+        so we can tell whether anyone is finding this useful. Those numbers
+        are <a href="/stats">public</a>.
+    </p>
+</section>
+
+<section class="quickstart">
+    <h2>Get started in 90 seconds</h2>
+    <ol class="steps">
+        <li>
+            <strong>Download.</strong>
+            One file: <code>fliporium.exe</code>. Save it anywhere — desktop, a USB stick, whatever.
+        </li>
+        <li>
+            <strong>Run it.</strong>
+            Double-click. The first time, you'll see a short Welcome tour and the app will quietly join your private tailnet.
+        </li>
+        <li>
+            <strong>Invite someone.</strong>
+            Open <em>Backstage → Invite a friend</em> and show them the QR code. They scan, they download, and they show up on your Floor.
+        </li>
+    </ol>
+    <div class="quickstart-cta">
+        <a class="btn btn-primary" href="/dl/fliporium.exe">Download Fliporium for Windows</a>
+    </div>
+</section>
+
+</main>
+
+<footer class="sitefoot">
+    <div class="foot-inner">
+        <a href="/" class="brand">
+            <img src="/logo.svg" alt="" width="24" height="24">
+            <span>Fliporium</span>
+        </a>
+        <nav>
+            <a href="/docs">Docs</a>
+            <a href="/privacy">Privacy</a>
+            <a href="/stats">Stats</a>
+        </nav>
+        <p class="foot-line">
+            Built with care. No ads, no trackers, no analytics scripts on this page.
+        </p>
+    </div>
+</footer>
+
+</body>
+</html>

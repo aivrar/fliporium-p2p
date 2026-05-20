@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy — Fliporium</title>
+<meta name="description" content="The Fliporium privacy promise: no ads, no third-party trackers, no message logging. Just two public numbers — total downloads and currently-online devices.">
+<meta name="theme-color" content="#131318">
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topnav">
+    <a href="/" class="brand">
+        <img src="/logo.svg" alt="" width="32" height="32">
+        <span>Fliporium</span>
+    </a>
+    <nav>
+        <a href="/docs">Docs</a>
+        <a href="/privacy" aria-current="page">Privacy</a>
+        <a href="/stats">Stats</a>
+    </nav>
+</header>
+
+<main>
+
+<div class="page-title">
+    <h1>Privacy</h1>
+    <p>Short version: your stuff isn't ours to look at. Long version below.</p>
+</div>
+
+<article class="doc">
+
+<h2>What we collect</h2>
+<p>From the website (this page):</p>
+<ul>
+    <li>Nothing. There are no analytics scripts, no cookies, no third-party fonts, no third-party CDNs. Your browser fetches HTML, CSS, the logo, and that's it.</li>
+    <li>Our web server logs the IP address and timestamp of each request for 14 days for basic abuse defense (rate-limit if anyone tries to flood it). Logs are then deleted.</li>
+</ul>
+<p>From the desktop app:</p>
+<ul>
+    <li>When you launch Fliporium, your device contacts our Headscale control server to register or refresh its tailnet membership. That handshake includes your device's public key and a hostname you choose.</li>
+    <li>That's all. The control server's job is introducing peers to each other, not relaying messages.</li>
+</ul>
+
+<h2>What we can see</h2>
+<p>
+    Because we operate the control server, we can see:
+</p>
+<ul>
+    <li>How many unique devices have ever registered.</li>
+    <li>Which devices are connected right now, and roughly how long they've been connected.</li>
+    <li>The hostname each device chose for itself.</li>
+</ul>
+<p>
+    Two of these numbers (total registered devices, currently connected) are
+    <a href="/stats">published openly</a>. That's the only &ldquo;tracking&rdquo;
+    we do, and it covers the whole tailnet in aggregate — no per-user data.
+</p>
+
+<h2>What we can't see, ever</h2>
+<p>
+    Once two peers have been introduced, they talk directly over an encrypted
+    WireGuard tunnel between their devices. The control server isn't in that
+    path. We physically cannot intercept, decrypt, or log any of the
+    following, regardless of what someone might ask us to do:
+</p>
+<ul>
+    <li>The contents of your messages.</li>
+    <li>Who you messaged or when.</li>
+    <li>The files you flipped (or even that a flip happened).</li>
+    <li>What you watched in Showtime.</li>
+    <li>The contents of any booth notepad.</li>
+    <li>Your reactions, edits, deletes, or pins.</li>
+</ul>
+<p>
+    Encryption keys are generated and held only by your devices. We never see
+    them.
+</p>
+
+<h2>Cookies, ads, third parties</h2>
+<p>
+    The site uses zero cookies. There are no third-party scripts on this page
+    — no Google Analytics, no Facebook pixel, no Plausible, no Cloudflare
+    Insights, nothing. The download link is hosted on the same server as the
+    site; downloading the <code>.exe</code> does not contact any third party.
+</p>
+<p>
+    There is no advertising and no plan to add any. Nothing here is monetized
+    by &ldquo;data&rdquo;.
+</p>
+
+<h2>Children</h2>
+<p>
+    Fliporium isn't designed for, marketed to, or particularly safe for
+    children. If you're under 13, you shouldn't be using it.
+</p>
+
+<h2>Changes</h2>
+<p>
+    If this page changes, the change shows up in the git history of the site
+    repo (we don't run a stealth A/B framework — what you see here is what's
+    deployed). If we ever start collecting more, we'll announce it loudly on
+    the home page and you can yell at us.
+</p>
+
+<h2>Contact</h2>
+<p>
+    Reach the maintainer at
+    <a href="mailto:christerfredrickson@gmail.com">christerfredrickson@gmail.com</a>.
+</p>
+
+</article>
+
+</main>
+
+<footer class="sitefoot">
+    <div class="foot-inner">
+        <a href="/" class="brand">
+            <img src="/logo.svg" alt="" width="24" height="24">
+            <span>Fliporium</span>
+        </a>
+        <nav>
+            <a href="/docs">Docs</a>
+            <a href="/privacy">Privacy</a>
+            <a href="/stats">Stats</a>
+        </nav>
+        <p class="foot-line">
+            Built with care. No ads, no trackers, no analytics scripts on this page.
+        </p>
+    </div>
+</footer>
+
+</body>
+</html>

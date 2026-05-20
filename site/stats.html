@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stats — Fliporium</title>
+<meta name="description" content="How many people are running Fliporium right now? Public, aggregate-only stats. No per-user tracking.">
+<meta name="theme-color" content="#131318">
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topnav">
+    <a href="/" class="brand">
+        <img src="/logo.svg" alt="" width="32" height="32">
+        <span>Fliporium</span>
+    </a>
+    <nav>
+        <a href="/docs">Docs</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/stats" aria-current="page">Stats</a>
+    </nav>
+</header>
+
+<main>
+
+<div class="page-title">
+    <h1>Stats</h1>
+    <p>The whole tailnet, as a few numbers. Nothing per-user. Nothing more.</p>
+</div>
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <p class="stat-num pending" id="stat-downloads" data-loading="true"></p>
+        <p class="stat-label">Downloads</p>
+    </div>
+    <div class="stat-card">
+        <p class="stat-num pending" id="stat-online" data-loading="true"></p>
+        <p class="stat-label">Online right now</p>
+    </div>
+    <div class="stat-card">
+        <p class="stat-num pending" id="stat-registered" data-loading="true"></p>
+        <p class="stat-label">Total registered</p>
+    </div>
+</div>
+
+<p class="stat-note">
+    Stats refresh when you reload the page. No JavaScript ping-back, no
+    fingerprinting, no per-visit tracking. Updated in near real time from our
+    Headscale control server.
+</p>
+
+<article class="doc">
+
+<h2>What each number means</h2>
+<dl>
+    <dt>Downloads</dt>
+    <dd>How many times <code>fliporium.exe</code> has been downloaded from this site. Counted server-side by our nginx access log. A retry counts once per unique IP per day.</dd>
+    <dt>Online right now</dt>
+    <dd>How many devices are connected to the Fliporium tailnet at this moment. A device is &ldquo;online&rdquo; if its WireGuard keepalive has fired in the last 5 minutes.</dd>
+    <dt>Total registered</dt>
+    <dd>How many unique devices have ever joined the tailnet. Includes devices that may have stopped using Fliporium and gotten cleaned up by our nightly stale-node sweep (we delete entries inactive for &gt;24h).</dd>
+</dl>
+
+<h2>What this page doesn't do</h2>
+<ul>
+    <li>It does not log which IP visited which stat page.</li>
+    <li>It does not show per-device data of any kind.</li>
+    <li>It does not store cookies.</li>
+    <li>It does not load any third-party scripts.</li>
+</ul>
+
+<p>
+    See the <a href="/privacy">privacy page</a> for the full posture.
+</p>
+
+</article>
+
+</main>
+
+<footer class="sitefoot">
+    <div class="foot-inner">
+        <a href="/" class="brand">
+            <img src="/logo.svg" alt="" width="24" height="24">
+            <span>Fliporium</span>
+        </a>
+        <nav>
+            <a href="/docs">Docs</a>
+            <a href="/privacy">Privacy</a>
+            <a href="/stats">Stats</a>
+        </nav>
+        <p class="foot-line">
+            Built with care. No ads, no trackers, no analytics scripts on this page.
+        </p>
+    </div>
+</footer>
+
+<script>
+// Single tiny inline script: one fetch on page load, no third-party.
+(async () => {
+    try {
+        const res = await fetch("/api/stats", { cache: "no-store" });
+        if (!res.ok) throw new Error("api " + res.status);
+        const s = await res.json();
+        const set = (id, n) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove("pending");
+            el.textContent = (typeof n === "number") ? n.toLocaleString() : "—";
+        };
+        set("stat-downloads", s.downloads);
+        set("stat-online", s.online_now);
+        set("stat-registered", s.registered_total);
+    } catch (e) {
+        // Leave the placeholder dashes; failed silently is fine.
+    }
+})();
+</script>
+
+</body>
+</html>
