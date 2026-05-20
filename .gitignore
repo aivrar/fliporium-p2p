@@ -1,0 +1,30 @@
+# Credentials and one-shot test artifacts — never commit these
+.vps
+.ssh-askpass.cmd
+.preauth-test
+.fix-log.txt
+
+# Temp scripts used during setup; kept locally for reference but not history
+.tmp-*.sh
+.headscale-config-default.yaml
+
+# Build output
+*.exe
+*.dll
+fliporium-test
+fliporium
+
+# Per-node tailscale identity / data folder (each install is its own)
+fliporium-data/
+node-*/
+
+# Go build cache leftovers
+vendor/
+*.test
+*.out
+coverage.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
