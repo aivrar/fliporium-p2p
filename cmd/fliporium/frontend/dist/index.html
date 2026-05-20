@@ -14,7 +14,7 @@
         <span id="selfDot" class="dot offline"></span>
         <span id="selfName">…</span>
         <span id="selfIp"></span>
-        <button id="twinBtn" class="topbar-btn" title="Twin Mode (pair another of your devices)">twin</button>
+        <button id="backstageBtn" class="topbar-btn" title="Backstage — settings, twin, themes">Backstage</button>
     </div>
 </header>
 
@@ -64,6 +64,60 @@
 <div id="drop-overlay" class="hidden">
     <div class="drop-msg">drop to flip</div>
 </div>
+
+<div id="confetti-layer" aria-hidden="true"></div>
+
+<div id="tour-overlay" class="hidden">
+    <div class="tour-card">
+        <div class="tour-icon" id="tour-icon">🎪</div>
+        <h2 id="tour-title">Welcome to Fliporium</h2>
+        <p id="tour-body">A small private place for you and the people you care about.</p>
+        <div class="tour-dots">
+            <span data-step="0" class="active"></span>
+            <span data-step="1"></span>
+            <span data-step="2"></span>
+            <span data-step="3"></span>
+        </div>
+        <div class="tour-actions">
+            <button id="tour-skip" class="ghost">skip</button>
+            <button id="tour-next">next</button>
+        </div>
+    </div>
+</div>
+
+<aside id="backstage" class="hidden">
+    <div class="bs-header">
+        <span>Backstage</span>
+        <button id="bs-close" class="ghost">×</button>
+    </div>
+    <section class="bs-section">
+        <h3>You</h3>
+        <div id="bs-self" class="bs-row"></div>
+    </section>
+    <section class="bs-section">
+        <h3>Theme</h3>
+        <label><input type="radio" name="theme" value="dark" checked> Dark</label>
+        <label><input type="radio" name="theme" value="light"> Light</label>
+    </section>
+    <section class="bs-section">
+        <h3>Sounds</h3>
+        <label><input type="checkbox" id="bs-sounds"> Chime on incoming messages (when chat isn't focused)</label>
+    </section>
+    <section class="bs-section">
+        <h3>Twin Mode</h3>
+        <p class="bs-hint">Pair another of your devices to keep 1:1 chat history in sync.</p>
+        <div class="bs-row">
+            <input id="bs-twin-input" placeholder="other device's hostname" autocomplete="off">
+            <button id="bs-twin-save">save</button>
+            <button id="bs-twin-clear" class="ghost">clear</button>
+        </div>
+        <div id="bs-twin-current" class="bs-hint"></div>
+    </section>
+    <section class="bs-section">
+        <h3>Help</h3>
+        <button id="bs-replay-tour" class="ghost">replay first-launch tour</button>
+    </section>
+</aside>
 
 <div id="toast" class="toast hidden"></div>
 

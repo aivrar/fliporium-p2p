@@ -921,6 +921,51 @@ func (a *App) SendShowtimeState(sessionID, boothID string, playing bool, positio
 	return nil
 }
 
+// ---------- generic preferences (used by Backstage / tour / confetti) ----------
+
+// GetPref returns the value for a settings key, or "" if unset.
+func (a *App) GetPref(key string) (string, error) {
+	if a.store == nil {
+		return "", fmt.Errorf("store not ready")
+	}
+	return a.store.GetSetting(a.ctx, key)
+}
+
+// SetPref upserts a settings key.
+func (a *App) SetPref(key, value string) error {
+	if a.store == nil {
+		return fmt.Errorf("store not ready")
+	}
+	return a.store.SetSetting(a.ctx, key, value)
+}
+
+// IsPeerNew returns true the first time it's asked about a given peer name,
+// and false on every subsequent call. Used by the frontend to trigger a
+// confetti moment exactly once per peer.
+func (a *App) IsPeerNew(name string) (bool, error) {
+	if a.store == nil {
+		return false, fmt.Errorf("store not ready")
+	}
+	cur, err := a.store.GetSetting(a.ctx, store.SettingSeenPeers)
+	if err != nil {
+		return false, err
+	}
+	for _, p := range strings.Split(cur, ",") {
+		if p == name {
+			return false, nil
+		}
+	}
+	updated := cur
+	if updated != "" {
+		updated += ","
+	}
+	updated += name
+	if err := a.store.SetSetting(a.ctx, store.SettingSeenPeers, updated); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // ---------- Twin Mode bindings ----------
 
 // GetTwin returns the currently paired twin's hostname (or "" if unpaired).

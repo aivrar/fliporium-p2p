@@ -626,48 +626,192 @@ function renderSelf() {
     $("selfName").textContent = state.self.hostname || "-";
     $("selfDot").className = "dot " + (state.self.online ? "connected" : "offline");
     $("selfIp").textContent = (state.self.ips && state.self.ips[0]) ? "- " + state.self.ips[0] : "";
-    renderTwinBtn();
 }
 
 let currentTwin = null;
 async function refreshTwin() {
-    try {
-        currentTwin = await window.go.main.App.GetTwin();
-    } catch (e) {
-        currentTwin = null;
-    }
-    renderTwinBtn();
+    try { currentTwin = await window.go.main.App.GetTwin(); }
+    catch (e) { currentTwin = null; }
 }
-function renderTwinBtn() {
-    const btn = $("twinBtn");
-    if (!btn) return;
-    if (currentTwin) {
-        btn.textContent = "twin: " + currentTwin;
-        btn.classList.add("active");
-    } else {
-        btn.textContent = "twin";
-        btn.classList.remove("active");
-    }
+
+// ---------- Backstage drawer ----------
+
+function openBackstage() {
+    $("backstage").classList.remove("hidden");
+    paintBackstage();
 }
-function bindTwin() {
-    $("twinBtn").addEventListener("click", async () => {
-        const cur = currentTwin || "";
-        const next = prompt(
-            "Twin Mode pairs another of your own Fliporium instances so 1:1 chat history syncs both ways. " +
-            "Enter the other instance's hostname, or leave blank to unpair.\n\nCurrent: " + (cur || "(none)"),
-            cur);
-        if (next === null) return;
-        try {
-            if (next.trim() === "") {
-                await window.go.main.App.ClearTwin();
-            } else {
-                await window.go.main.App.SetTwin(next.trim());
-            }
-            await refreshTwin();
-        } catch (e) {
-            toast("twin: " + e);
-        }
+function closeBackstage() { $("backstage").classList.add("hidden"); }
+
+async function paintBackstage() {
+    // Self
+    if (state.self) {
+        const ip = (state.self.ips && state.self.ips[0]) ? state.self.ips[0] : "";
+        $("bs-self").innerHTML = `<strong>${escapeAttr(state.self.hostname || "")}</strong> &mdash; ${escapeAttr(ip)}`;
+    }
+    // Theme
+    let theme = "dark";
+    try { theme = (await window.go.main.App.GetPref("theme")) || "dark"; } catch (e) {}
+    document.querySelectorAll('input[name="theme"]').forEach(r => r.checked = r.value === theme);
+    // Sounds
+    let snd = "0";
+    try { snd = (await window.go.main.App.GetPref("sounds_on")) || "0"; } catch (e) {}
+    $("bs-sounds").checked = snd === "1";
+    // Twin
+    await refreshTwin();
+    $("bs-twin-input").value = currentTwin || "";
+    $("bs-twin-current").textContent = currentTwin ? ("currently paired with " + currentTwin) : "not paired";
+}
+
+function bindBackstage() {
+    $("backstageBtn").addEventListener("click", openBackstage);
+    $("bs-close").addEventListener("click", closeBackstage);
+    document.querySelectorAll('input[name="theme"]').forEach(r => {
+        r.addEventListener("change", async () => {
+            const t = r.value;
+            applyTheme(t);
+            try { await window.go.main.App.SetPref("theme", t); } catch (e) { toast("theme: " + e); }
+        });
     });
+    $("bs-sounds").addEventListener("change", async () => {
+        try { await window.go.main.App.SetPref("sounds_on", $("bs-sounds").checked ? "1" : "0"); }
+        catch (e) { toast("sounds: " + e); }
+    });
+    $("bs-twin-save").addEventListener("click", async () => {
+        const v = $("bs-twin-input").value.trim();
+        if (!v) return;
+        try {
+            await window.go.main.App.SetTwin(v);
+            await refreshTwin();
+            $("bs-twin-current").textContent = "currently paired with " + v;
+            toast("paired with " + v);
+        } catch (e) { toast("twin: " + e); }
+    });
+    $("bs-twin-clear").addEventListener("click", async () => {
+        try {
+            await window.go.main.App.ClearTwin();
+            await refreshTwin();
+            $("bs-twin-input").value = "";
+            $("bs-twin-current").textContent = "not paired";
+            toast("unpaired");
+        } catch (e) { toast("twin: " + e); }
+    });
+    $("bs-replay-tour").addEventListener("click", async () => {
+        await window.go.main.App.SetPref("tour_done", "");
+        closeBackstage();
+        showTour(0);
+    });
+}
+
+// ---------- theme ----------
+
+function applyTheme(t) {
+    if (t === "light") document.documentElement.setAttribute("data-theme", "light");
+    else document.documentElement.removeAttribute("data-theme");
+}
+
+async function loadTheme() {
+    try {
+        const t = await window.go.main.App.GetPref("theme");
+        if (t) applyTheme(t);
+    } catch (e) {}
+}
+
+// ---------- tour ----------
+
+const TOUR_STEPS = [
+    { icon: "🎪", title: "Welcome to Fliporium", body: "A small private place for you and the people you care about. Built on a tailnet you own — no central server holds your messages." },
+    { icon: "🪁", title: "Flip a file", body: "Drag any file onto a peer's chat to send it. There's no size cap. Files land in the other person's Catch folder, right next to their copy of the app." },
+    { icon: "📥", title: "Catch", body: "Caught files render inline when they can — images, video, audio, PDFs, code. Click 'open' to hand them off to your default app." },
+    { icon: "🎪", title: "Booths", body: "A Booth is a named group room. Anyone in a Booth can post, drop files, take notes together, or fire up a Watch Party. The + next to BOOTHS makes a new one." },
+];
+let tourStep = 0;
+
+function showTour(step = 0) {
+    tourStep = step;
+    renderTourStep();
+    $("tour-overlay").classList.remove("hidden");
+}
+function hideTour() { $("tour-overlay").classList.add("hidden"); }
+
+function renderTourStep() {
+    const s = TOUR_STEPS[tourStep];
+    $("tour-icon").textContent = s.icon;
+    $("tour-title").textContent = s.title;
+    $("tour-body").textContent = s.body;
+    document.querySelectorAll(".tour-dots span").forEach(d => {
+        d.classList.toggle("active", parseInt(d.dataset.step, 10) === tourStep);
+    });
+    $("tour-next").textContent = (tourStep === TOUR_STEPS.length - 1) ? "got it" : "next";
+}
+
+function bindTour() {
+    $("tour-next").addEventListener("click", async () => {
+        if (tourStep === TOUR_STEPS.length - 1) {
+            hideTour();
+            try { await window.go.main.App.SetPref("tour_done", "1"); } catch (e) {}
+            return;
+        }
+        tourStep++;
+        renderTourStep();
+    });
+    $("tour-skip").addEventListener("click", async () => {
+        hideTour();
+        try { await window.go.main.App.SetPref("tour_done", "1"); } catch (e) {}
+    });
+}
+
+async function maybeShowTourOnBoot() {
+    try {
+        const done = await window.go.main.App.GetPref("tour_done");
+        if (done !== "1") showTour(0);
+    } catch (e) {}
+}
+
+// ---------- notification sound ----------
+
+let audioCtx = null;
+function playChime() {
+    try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(660, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.18);
+        gain.gain.setValueAtTime(0, audioCtx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.08, audioCtx.currentTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.25);
+        osc.connect(gain).connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.3);
+    } catch (e) {}
+}
+
+async function maybeChime(forContext) {
+    try {
+        const on = await window.go.main.App.GetPref("sounds_on");
+        if (on !== "1") return;
+        playChime();
+    } catch (e) {}
+}
+
+// ---------- confetti ----------
+
+function confettiBurst(count = 60) {
+    const layer = $("confetti-layer");
+    if (!layer) return;
+    const colors = ["#c9a7ff", "#4ade80", "#ffd166", "#ef4444", "#5bc0eb"];
+    for (let i = 0; i < count; i++) {
+        const p = document.createElement("div");
+        p.className = "confetti-piece";
+        p.style.left = Math.random() * 100 + "vw";
+        p.style.background = colors[i % colors.length];
+        p.style.animationDelay = (Math.random() * 0.3) + "s";
+        p.style.animationDuration = (1.2 + Math.random() * 0.8) + "s";
+        p.style.transform = `rotate(${Math.random() * 360}deg)`;
+        layer.appendChild(p);
+        setTimeout(() => p.remove(), 2200);
+    }
 }
 
 // ---------- composer + attach + drop ----------
@@ -826,12 +970,26 @@ function bindEvents() {
         }
     });
 
-    window.runtime.EventsOn("peer-state-changed", async () => {
+    window.runtime.EventsOn("peer-state-changed", async (ev) => {
         await refreshPeers();
         renderChat();
+        // Confetti the first time we successfully connect to a brand-new peer.
+        if (ev && ev.connected && ev.peer) {
+            try {
+                const fresh = await window.go.main.App.IsPeerNew(ev.peer);
+                if (fresh) confettiBurst();
+            } catch (e) {}
+        }
     });
 
-    window.runtime.EventsOn("message", (m) => appendMessage(m));
+    window.runtime.EventsOn("message", (m) => {
+        appendMessage(m);
+        // Chime if this is an inbound message for a chat we're not currently viewing.
+        if (m.direction === "in") {
+            const focused = (m.boothId && isBoothSelected(m.boothId)) || (!m.boothId && isPeerSelected(m.peer));
+            if (!focused) maybeChime();
+        }
+    });
 
     window.runtime.EventsOn("flip", (f) => upsertFlip(f));
 
@@ -882,13 +1040,16 @@ function bindEvents() {
 // ---------- boot ----------
 
 async function boot() {
+    await loadTheme();
     bindComposer();
     bindNotepad();
-    bindTwin();
+    bindBackstage();
+    bindTour();
     bindDragDrop();
     bindEvents();
     renderSelf();
     refreshTwin();
+    maybeShowTourOnBoot();
 
     try {
         const status = await window.go.main.App.Status();
