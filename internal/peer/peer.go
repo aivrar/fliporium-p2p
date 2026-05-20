@@ -97,7 +97,13 @@ const (
 	EventFlipProgress  HubEventKind = "flip-progress"
 	EventFlipCompleted HubEventKind = "flip-completed"
 	EventFlipFailed    HubEventKind = "flip-failed"
+	EventBoothInvited  HubEventKind = "booth-invited"
 )
+
+// MessageEventData accompanies EventMessage so the app layer can route by Booth.
+type MessageEventData struct {
+	BoothID string
+}
 
 // FlipEventData is the structured payload attached to Event Flip* events.
 type FlipEventData struct {
@@ -185,13 +191,33 @@ func (h *Hub) remove(name string) {
 	delete(h.conns, name)
 }
 
-// Send queues a MESSAGE to a named peer.
+// Send queues a 1:1 MESSAGE to a named peer.
 func (h *Hub) Send(peerName, text string) error {
 	c := h.Get(peerName)
 	if c == nil {
 		return fmt.Errorf("no active connection to %q", peerName)
 	}
 	return c.WriteFrame(TypeMessage, Message{Text: text, At: time.Now().UTC()})
+}
+
+// SendBooth queues a Booth-scoped MESSAGE to one specific connected peer.
+// The caller is responsible for iterating the Booth's members and calling
+// SendBooth for each one that's reachable.
+func (h *Hub) SendBooth(peerName, boothID, text string) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypeMessage, Message{Text: text, At: time.Now().UTC(), BoothID: boothID})
+}
+
+// SendBoothInvite hands a Booth's full state to one peer.
+func (h *Hub) SendBoothInvite(peerName string, inv BoothInvite) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypeBoothInvite, inv)
 }
 
 // ByeAll sends BYE to every peer and closes their connections.
@@ -229,7 +255,7 @@ func (h *Hub) runLoop(c *PeerConn) {
 			if err := json.Unmarshal(env.Body, &m); err != nil {
 				continue
 			}
-			h.emit(HubEvent{Kind: EventMessage, Peer: c.Name, Text: m.Text})
+			h.emit(HubEvent{Kind: EventMessage, Peer: c.Name, Text: m.Text, Data: &MessageEventData{BoothID: m.BoothID}})
 		case TypeBye:
 			var b Bye
 			_ = json.Unmarshal(env.Body, &b)
@@ -260,6 +286,11 @@ func (h *Hub) runLoop(c *PeerConn) {
 			var r FlipReject
 			if err := json.Unmarshal(env.Body, &r); err == nil {
 				h.handleFlipReject(c.Name, r)
+			}
+		case TypeBoothInvite:
+			var inv BoothInvite
+			if err := json.Unmarshal(env.Body, &inv); err == nil {
+				h.emit(HubEvent{Kind: EventBoothInvited, Peer: c.Name, Text: inv.Name, Data: &inv})
 			}
 		}
 	}

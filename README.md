@@ -12,7 +12,8 @@ Headscale tailnet. See `fliporium-brief.md` for the full vision.
 | 3 | Terminal P2P chat (HELLO/MESSAGE/BYE over TLS-on-tsnet) | done |
 | 4 | Wails desktop UI: The Floor, peer list, 1:1 chat, SQLite history, basic Markdown | done (alpha) |
 | 5 | File flipping + Catch folder + inline image/video/audio/pdf/text viewers | done v0.1 (no resumability, no multi-file, no folder flips) |
-| 6+ | Booths, Showtime, Workshop, Twin Mode, polish | not started |
+| 6 | Booths (named multi-peer group chat) + mesh fan-out + GUI/CLI surfaces | done v0.1 (no reactions/edit/delete/threads/themes/emoji/search) |
+| 7+ | Showtime, Workshop, Twin Mode, polish | not started |
 
 ## Layout
 
@@ -132,6 +133,36 @@ CLI equivalents (in `.\run.ps1 -Cli`):
 flip <path>             # send to the only open peer
 flip @<peer> <path>     # send to a specific peer
 ```
+
+## Booths (Phase 6)
+
+A **Booth** is a named multi-peer chat room. Each peer keeps its own copy of
+the booth, members, and message history; the founder seeds it via a
+`BOOTH_INVITE` envelope to each other member.
+
+GUI: in The Floor, click the **+** next to "Booths" to create one. You're
+prompted for a name and a comma-separated member list (online peers are
+pre-filled as a hint). Click a booth row to see its messages. The composer
+posts to the booth and the message fans out to every connected member.
+
+CLI:
+
+```
+booth create <name> <peer1,peer2,...>
+booth list
+booth members <id|name>
+booth send <id|name> <text>
+```
+
+Scripted-test env on the CLI:
+
+- `FLIPORIUM_AUTOPEER=p1,p2`         comma-separated peers to auto-dial
+- `FLIPORIUM_AUTOBOOTH=name|p1,p2`   create the booth after auto-peering
+- `FLIPORIUM_AUTOBOOTHSAY=text`      send this message into the auto-created booth
+
+Phase 6 MVP **does not yet**: edit/delete messages, reply/thread, react with
+emoji, pin, theme, customize emoji, search, support roles, or store-and-forward
+missed messages to members who were offline when the booth was created.
 
 ## Known caveats (will be tightened in later phases)
 

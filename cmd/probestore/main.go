@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"fliporium/internal/store"
 )
@@ -53,6 +54,29 @@ func main() {
 			}
 			fmt.Printf("  %s  %s  [%s]  %s  %d bytes  status=%s  mime=%s  path=%s\n",
 				f.StartedAt.Format("15:04:05"), arrow, f.ID[:8], f.Filename, f.Size, f.Status, f.Mime, f.Path)
+		}
+	}
+
+	// Booths
+	booths, _ := s.ListBooths(ctx)
+	fmt.Println()
+	fmt.Printf("== booths (%d) ==\n", len(booths))
+	for _, b := range booths {
+		members, _ := s.BoothMembers(ctx, b.ID)
+		names := make([]string, 0, len(members))
+		for _, m := range members {
+			names = append(names, m.PeerName)
+		}
+		fmt.Printf("  [%s]  %q  founder=%s  members=[%s]\n", b.ID[:8], b.Name, b.Founder, strings.Join(names, ", "))
+
+		msgs, _ := s.MessagesByBooth(ctx, b.ID, 100)
+		fmt.Printf("    %d messages:\n", len(msgs))
+		for _, m := range msgs {
+			arrow := "<-"
+			if m.Direction == "out" {
+				arrow = "->"
+			}
+			fmt.Printf("    %s  %s  %s  %s\n", m.At.Format("15:04:05"), arrow, m.Peer, m.Text)
 		}
 	}
 }

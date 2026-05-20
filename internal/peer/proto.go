@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const ProtocolVersion = "fliporium/0.5"
+const ProtocolVersion = "fliporium/0.6"
 
 type MessageType string
 
@@ -29,6 +29,9 @@ const (
 	TypeFlipEnd    MessageType = "FLIP_END"
 	TypeFlipAck    MessageType = "FLIP_ACK"
 	TypeFlipReject MessageType = "FLIP_REJECT"
+
+	// Booths = multi-peer named chat rooms (v0.6).
+	TypeBoothInvite MessageType = "BOOTH_INVITE"
 )
 
 type Envelope struct {
@@ -42,8 +45,20 @@ type Hello struct {
 }
 
 type Message struct {
-	Text string    `json:"text"`
-	At   time.Time `json:"at"`
+	Text    string    `json:"text"`
+	At      time.Time `json:"at"`
+	BoothID string    `json:"booth_id,omitempty"` // empty for 1:1
+}
+
+// BoothInvite seeds the recipient's local copy of a Booth.
+// The sender is always one of the members.
+type BoothInvite struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Founder   string    `json:"founder"`
+	Members   []string  `json:"members"`
+	Motto     string    `json:"motto,omitempty"`
+	FoundedAt time.Time `json:"founded_at"`
 }
 
 type Bye struct {

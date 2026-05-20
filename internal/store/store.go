@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -23,12 +24,17 @@ const (
 )
 
 // Message is one persisted chat line.
+//
+// For a 1:1 conversation BoothID is empty and Peer is the conversation
+// partner. For a Booth message BoothID is set and Peer is the *sender*
+// (which can be us, in which case Direction is "out").
 type Message struct {
 	ID        int64
 	Peer      string
 	Direction string
 	Text      string
 	At        time.Time
+	BoothID   string
 }
 
 // PeerRecord is what we remember about a peer between sessions.
@@ -36,6 +42,23 @@ type PeerRecord struct {
 	Name      string
 	FirstSeen time.Time
 	LastSeen  time.Time
+}
+
+// Booth is a named multi-peer chat room. Each peer keeps its own copy of the
+// booth + member list; the founder seeds it via BOOTH_INVITE messages.
+type Booth struct {
+	ID        string
+	Name      string
+	Founder   string // peer name of the creator
+	FoundedAt time.Time
+	Motto     string
+}
+
+// BoothMember pairs a peer name with the booth it joined.
+type BoothMember struct {
+	BoothID  string
+	PeerName string
+	JoinedAt time.Time
 }
 
 // FlipStatus tracks where a transfer is in its lifecycle.
@@ -106,10 +129,27 @@ CREATE TABLE IF NOT EXISTS messages (
     peer      TEXT NOT NULL,
     direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
     text      TEXT NOT NULL,
-    at        TEXT NOT NULL
+    at        TEXT NOT NULL,
+    booth_id  TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_messages_peer_at ON messages(peer, at);
+CREATE INDEX IF NOT EXISTS idx_messages_peer_at  ON messages(peer, at);
+CREATE INDEX IF NOT EXISTS idx_messages_booth_at ON messages(booth_id, at);
+
+CREATE TABLE IF NOT EXISTS booths (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    founder    TEXT NOT NULL,
+    founded_at TEXT NOT NULL,
+    motto      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS booth_members (
+    booth_id  TEXT NOT NULL,
+    peer_name TEXT NOT NULL,
+    joined_at TEXT NOT NULL,
+    PRIMARY KEY (booth_id, peer_name)
+);
 
 CREATE TABLE IF NOT EXISTS flips (
     id           TEXT PRIMARY KEY,
@@ -129,8 +169,16 @@ CREATE INDEX IF NOT EXISTS idx_flips_peer_started ON flips(peer, started_at);
 `
 
 func migrate(db *sql.DB) error {
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	// Idempotent ALTER for stores predating Phase 6. SQLite errors with
+	// "duplicate column name" if the column is already there, which we ignore.
+	if _, err := db.Exec(`ALTER TABLE messages ADD COLUMN booth_id TEXT`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("migrate add messages.booth_id: %w", err)
+	}
+	return nil
 }
 
 // UpsertPeer marks the peer as seen now; sets first_seen on first contact.
@@ -166,14 +214,23 @@ func (s *Store) Peers(ctx context.Context) ([]PeerRecord, error) {
 	return out, rows.Err()
 }
 
-// AppendMessage stores a single chat line.
+// AppendMessage stores a single chat line. boothID may be empty for 1:1.
 func (s *Store) AppendMessage(ctx context.Context, peer, direction, text string, at time.Time) error {
+	return s.AppendMessageBooth(ctx, peer, direction, text, "", at)
+}
+
+// AppendMessageBooth is the booth-aware variant of AppendMessage.
+func (s *Store) AppendMessageBooth(ctx context.Context, peer, direction, text, boothID string, at time.Time) error {
 	if direction != DirectionIn && direction != DirectionOut {
 		return fmt.Errorf("invalid direction %q", direction)
 	}
+	var boothCol *string
+	if boothID != "" {
+		boothCol = &boothID
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO messages (peer, direction, text, at) VALUES (?, ?, ?, ?)
-	`, peer, direction, text, at.UTC().Format(time.RFC3339Nano))
+		INSERT INTO messages (peer, direction, text, at, booth_id) VALUES (?, ?, ?, ?, ?)
+	`, peer, direction, text, at.UTC().Format(time.RFC3339Nano), boothCol)
 	return err
 }
 
@@ -276,39 +333,163 @@ func (s *Store) GetFlip(ctx context.Context, id string) (FlipRecord, error) {
 	return f, nil
 }
 
-// Messages returns the last `limit` messages with a given peer, oldest first.
+// Messages returns the last `limit` 1:1 messages with a given peer (booth_id is NULL).
 // limit <= 0 means "all".
 func (s *Store) Messages(ctx context.Context, peer string, limit int) ([]Message, error) {
 	var rows *sql.Rows
 	var err error
 	if limit > 0 {
-		// Get last N (newest), then reverse to oldest-first for chat display.
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, peer, direction, text, at FROM (
-				SELECT id, peer, direction, text, at
-				FROM messages WHERE peer = ?
+			SELECT id, peer, direction, text, at, COALESCE(booth_id, '') FROM (
+				SELECT id, peer, direction, text, at, booth_id
+				FROM messages WHERE peer = ? AND booth_id IS NULL
 				ORDER BY id DESC LIMIT ?
 			) ORDER BY id ASC
 		`, peer, limit)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, peer, direction, text, at FROM messages
-			WHERE peer = ? ORDER BY id ASC
+			SELECT id, peer, direction, text, at, COALESCE(booth_id, '') FROM messages
+			WHERE peer = ? AND booth_id IS NULL ORDER BY id ASC
 		`, peer)
 	}
 	if err != nil {
 		return nil, err
 	}
+	return scanMessages(rows)
+}
+
+// MessagesByBooth returns the last `limit` messages in a Booth, oldest first.
+// Includes messages from every sender (the "peer" column on each row is the sender).
+func (s *Store) MessagesByBooth(ctx context.Context, boothID string, limit int) ([]Message, error) {
+	var rows *sql.Rows
+	var err error
+	if limit > 0 {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id, peer, direction, text, at, COALESCE(booth_id, '') FROM (
+				SELECT id, peer, direction, text, at, booth_id
+				FROM messages WHERE booth_id = ?
+				ORDER BY id DESC LIMIT ?
+			) ORDER BY id ASC
+		`, boothID, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id, peer, direction, text, at, COALESCE(booth_id, '') FROM messages
+			WHERE booth_id = ? ORDER BY id ASC
+		`, boothID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return scanMessages(rows)
+}
+
+func scanMessages(rows *sql.Rows) ([]Message, error) {
 	defer rows.Close()
 	var out []Message
 	for rows.Next() {
 		var m Message
 		var atStr string
-		if err := rows.Scan(&m.ID, &m.Peer, &m.Direction, &m.Text, &atStr); err != nil {
+		if err := rows.Scan(&m.ID, &m.Peer, &m.Direction, &m.Text, &atStr, &m.BoothID); err != nil {
 			return nil, err
 		}
 		m.At, _ = time.Parse(time.RFC3339Nano, atStr)
 		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// UpsertBooth creates or updates a Booth row. Idempotent on (id).
+func (s *Store) UpsertBooth(ctx context.Context, b Booth) error {
+	if b.ID == "" || b.Name == "" {
+		return fmt.Errorf("booth id and name required")
+	}
+	if b.FoundedAt.IsZero() {
+		b.FoundedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO booths (id, name, founder, founded_at, motto) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name=excluded.name,
+			founder=excluded.founder,
+			motto=excluded.motto
+	`, b.ID, b.Name, b.Founder, b.FoundedAt.UTC().Format(time.RFC3339Nano), b.Motto)
+	return err
+}
+
+// AddBoothMember inserts a (booth_id, peer_name) row idempotently.
+func (s *Store) AddBoothMember(ctx context.Context, boothID, peerName string, joinedAt time.Time) error {
+	if joinedAt.IsZero() {
+		joinedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO booth_members (booth_id, peer_name, joined_at) VALUES (?, ?, ?)
+		ON CONFLICT(booth_id, peer_name) DO NOTHING
+	`, boothID, peerName, joinedAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+// RemoveBoothMember deletes a member row.
+func (s *Store) RemoveBoothMember(ctx context.Context, boothID, peerName string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM booth_members WHERE booth_id = ? AND peer_name = ?`, boothID, peerName)
+	return err
+}
+
+// ListBooths returns every booth in the store, newest first.
+func (s *Store) ListBooths(ctx context.Context) ([]Booth, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, founder, founded_at, COALESCE(motto, '') FROM booths
+		ORDER BY founded_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Booth
+	for rows.Next() {
+		var b Booth
+		var foundedStr string
+		if err := rows.Scan(&b.ID, &b.Name, &b.Founder, &foundedStr, &b.Motto); err != nil {
+			return nil, err
+		}
+		b.FoundedAt, _ = time.Parse(time.RFC3339Nano, foundedStr)
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// GetBooth returns a single booth by id.
+func (s *Store) GetBooth(ctx context.Context, id string) (Booth, error) {
+	var b Booth
+	var foundedStr string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, founder, founded_at, COALESCE(motto, '') FROM booths WHERE id = ?
+	`, id).Scan(&b.ID, &b.Name, &b.Founder, &foundedStr, &b.Motto)
+	if err != nil {
+		return Booth{}, err
+	}
+	b.FoundedAt, _ = time.Parse(time.RFC3339Nano, foundedStr)
+	return b, nil
+}
+
+// BoothMembers returns the peer names that belong to a booth.
+func (s *Store) BoothMembers(ctx context.Context, boothID string) ([]BoothMember, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT booth_id, peer_name, joined_at FROM booth_members
+		WHERE booth_id = ? ORDER BY joined_at ASC
+	`, boothID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BoothMember
+	for rows.Next() {
+		var bm BoothMember
+		var joinedStr string
+		if err := rows.Scan(&bm.BoothID, &bm.PeerName, &joinedStr); err != nil {
+			return nil, err
+		}
+		bm.JoinedAt, _ = time.Parse(time.RFC3339Nano, joinedStr)
+		out = append(out, bm)
 	}
 	return out, rows.Err()
 }
