@@ -49,6 +49,10 @@ const (
 	TypeMessageReaction MessageType = "MESSAGE_REACTION"
 	TypeMessageEdit     MessageType = "MESSAGE_EDIT"
 	TypeMessageDelete   MessageType = "MESSAGE_DELETE"
+	TypeMessagePin      MessageType = "MESSAGE_PIN"
+
+	// Round 5: rough presence broadcast.
+	TypePeerStatus MessageType = "PEER_STATUS"
 )
 
 type Envelope struct {
@@ -96,6 +100,22 @@ type MessageDelete struct {
 	MessageUUID string    `json:"message_uuid"`
 	BoothID     string    `json:"booth_id,omitempty"`
 	At          time.Time `json:"at"`
+}
+
+// MessagePin toggles the pinned flag. Anyone in the conversation can pin —
+// pinning isn't restricted to the author.
+type MessagePin struct {
+	MessageUUID string    `json:"message_uuid"`
+	Pinned      bool      `json:"pinned"`
+	BoothID     string    `json:"booth_id,omitempty"`
+	At          time.Time `json:"at"`
+}
+
+// PeerStatus advertises this peer's presence state to connected peers.
+// Status is one of "active", "idle", "away".
+type PeerStatus struct {
+	Status string    `json:"status"`
+	At     time.Time `json:"at"`
 }
 
 // BoothInvite seeds the recipient's local copy of a Booth.

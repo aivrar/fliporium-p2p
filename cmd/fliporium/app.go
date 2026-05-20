@@ -4,10 +4,12 @@ import (
 	"context"
 	cryptoRand "crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	"fliporium/internal/peer"
 	"fliporium/internal/store"
 
+	qrcode "github.com/skip2/go-qrcode"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"tailscale.com/tsnet"
 )
@@ -189,6 +192,10 @@ type App struct {
 
 	hostname string
 	dataDir  string
+
+	statusMu   sync.Mutex
+	peerStatus map[string]string // peer name -> "active"|"idle"|"away"
+	myStatus   string
 }
 
 func NewApp() *App {
@@ -422,6 +429,33 @@ func (a *App) eventPump() {
 					"uuid": d.MessageUUID, "boothId": d.BoothID, "deletedAt": d.At.UTC().Format(time.RFC3339Nano),
 				})
 			}
+		case peer.EventMessagePin:
+			p, _ := ev.Data.(*peer.MessagePin)
+			if p == nil {
+				continue
+			}
+			// Anyone in the conversation can pin — no sender check beyond
+			// "the connection is open" (which Tailscale + booth membership
+			// already gate).
+			if err := a.store.SetMessagePinned(a.ctx, p.MessageUUID, p.Pinned); err == nil {
+				wailsruntime.EventsEmit(a.ctx, "message-pinned", map[string]any{
+					"uuid": p.MessageUUID, "pinned": p.Pinned, "boothId": p.BoothID,
+				})
+			}
+		case peer.EventPeerStatus:
+			s, _ := ev.Data.(*peer.PeerStatus)
+			if s == nil {
+				continue
+			}
+			a.statusMu.Lock()
+			if a.peerStatus == nil {
+				a.peerStatus = map[string]string{}
+			}
+			a.peerStatus[ev.Peer] = s.Status
+			a.statusMu.Unlock()
+			wailsruntime.EventsEmit(a.ctx, "peer-status", map[string]any{
+				"peer": ev.Peer, "status": s.Status, "at": s.At.UTC().Format(time.RFC3339Nano),
+			})
 		case peer.EventInfo:
 			wailsruntime.EventsEmit(a.ctx, "info", map[string]any{
 				"peer": ev.Peer,
@@ -1184,6 +1218,97 @@ func (a *App) SendShowtimeState(sessionID, boothID string, playing bool, positio
 		_ = a.hub.SendShowtimeState(m.PeerName, st)
 	}
 	return nil
+}
+
+// ---------- pin / status / invite ----------
+
+// PinMessage toggles the pin state on a message and broadcasts the change.
+func (a *App) PinMessage(uuid string, pinned bool) error {
+	if a.store == nil || a.hub == nil {
+		return fmt.Errorf("app not ready")
+	}
+	if uuid == "" {
+		return fmt.Errorf("uuid required")
+	}
+	orig, err := a.store.FindMessageByUUID(a.ctx, uuid)
+	if err != nil {
+		return fmt.Errorf("no such message")
+	}
+	if err := a.store.SetMessagePinned(a.ctx, uuid, pinned); err != nil {
+		return err
+	}
+	pin := peer.MessagePin{MessageUUID: uuid, Pinned: pinned, BoothID: orig.BoothID, At: time.Now().UTC()}
+	if orig.BoothID != "" {
+		members, _ := a.store.BoothMembers(a.ctx, orig.BoothID)
+		for _, m := range members {
+			if m.PeerName == a.hostname {
+				continue
+			}
+			if a.hub.Get(m.PeerName) != nil {
+				_ = a.hub.SendMessagePin(m.PeerName, pin)
+			}
+		}
+	} else {
+		if a.hub.Get(orig.Peer) != nil {
+			_ = a.hub.SendMessagePin(orig.Peer, pin)
+		}
+	}
+	wailsruntime.EventsEmit(a.ctx, "message-pinned", map[string]any{
+		"uuid": uuid, "pinned": pinned, "boothId": orig.BoothID,
+	})
+	return nil
+}
+
+// SetStatus broadcasts the local presence state to every connected peer.
+// Status: "active" | "idle" | "away".
+func (a *App) SetStatus(status string) error {
+	if a.hub == nil {
+		return fmt.Errorf("hub not ready")
+	}
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status != "active" && status != "idle" && status != "away" {
+		return fmt.Errorf("invalid status %q", status)
+	}
+	a.statusMu.Lock()
+	if a.myStatus == status {
+		a.statusMu.Unlock()
+		return nil
+	}
+	a.myStatus = status
+	a.statusMu.Unlock()
+	a.hub.BroadcastPeerStatus(peer.PeerStatus{Status: status, At: time.Now().UTC()})
+	return nil
+}
+
+// PeerStatuses returns the last-known status for each connected peer (in-memory only).
+func (a *App) PeerStatuses() (map[string]string, error) {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	out := map[string]string{}
+	for k, v := range a.peerStatus {
+		out[k] = v
+	}
+	return out, nil
+}
+
+// GenerateInviteQR builds a fliporium://join URL for the configured server
+// and the supplied pre-auth key, then renders it as a base64 PNG data URL the
+// frontend can stick into an <img src>.
+func (a *App) GenerateInviteQR(authKey string) (string, error) {
+	authKey = strings.TrimSpace(authKey)
+	if authKey == "" {
+		return "", fmt.Errorf("auth key required")
+	}
+	u := url.URL{Scheme: "fliporium", Host: "join"}
+	q := u.Query()
+	q.Set("url", controlURL)
+	q.Set("key", authKey)
+	u.RawQuery = q.Encode()
+	png, err := qrcode.Encode(u.String(), qrcode.Medium, 256)
+	if err != nil {
+		return "", err
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png), nil
 }
 
 // ---------- search ----------

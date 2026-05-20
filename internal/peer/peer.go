@@ -110,6 +110,8 @@ const (
 	EventMessageReaction HubEventKind = "message-reaction"
 	EventMessageEdit     HubEventKind = "message-edit"
 	EventMessageDelete   HubEventKind = "message-delete"
+	EventMessagePin      HubEventKind = "message-pin"
+	EventPeerStatus      HubEventKind = "peer-status"
 )
 
 // MessageEventData accompanies EventMessage so the app layer can route by Booth
@@ -307,6 +309,31 @@ func (h *Hub) SendMessageDelete(peerName string, d MessageDelete) error {
 	return c.WriteFrame(TypeMessageDelete, d)
 }
 
+// SendMessagePin broadcasts a pin/unpin toggle.
+func (h *Hub) SendMessagePin(peerName string, p MessagePin) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypeMessagePin, p)
+}
+
+// SendPeerStatus advertises a presence state change to one peer.
+func (h *Hub) SendPeerStatus(peerName string, s PeerStatus) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypePeerStatus, s)
+}
+
+// BroadcastPeerStatus sends a status to every currently-connected peer.
+func (h *Hub) BroadcastPeerStatus(s PeerStatus) {
+	for _, name := range h.Names() {
+		_ = h.SendPeerStatus(name, s)
+	}
+}
+
 // ByeAll sends BYE to every peer and closes their connections.
 func (h *Hub) ByeAll(reason string) {
 	h.mu.RLock()
@@ -421,6 +448,16 @@ func (h *Hub) runLoop(c *PeerConn) {
 			var d MessageDelete
 			if err := json.Unmarshal(env.Body, &d); err == nil {
 				h.emit(HubEvent{Kind: EventMessageDelete, Peer: c.Name, Data: &d})
+			}
+		case TypeMessagePin:
+			var p MessagePin
+			if err := json.Unmarshal(env.Body, &p); err == nil {
+				h.emit(HubEvent{Kind: EventMessagePin, Peer: c.Name, Data: &p})
+			}
+		case TypePeerStatus:
+			var s PeerStatus
+			if err := json.Unmarshal(env.Body, &s); err == nil {
+				h.emit(HubEvent{Kind: EventPeerStatus, Peer: c.Name, Text: s.Status, Data: &s})
 			}
 		}
 	}

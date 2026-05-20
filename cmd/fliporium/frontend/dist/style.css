@@ -821,6 +821,36 @@ html[data-theme="light"] .bs-row input { background: #fff; border-color: #d0d0d8
 .bs-row button:hover { background: #3a3148; color: #f1f1ff; }
 html[data-theme="light"] .bs-row button { background: #ece4ff; color: #5b3aa3; border-color: #d6c5ff; }
 .bs-hint { color: #6f7384; font-size: 11px; margin-top: 6px; line-height: 1.4; }
+#bs-invite-qr { margin-top: 10px; display: flex; justify-content: center; }
+#bs-invite-qr img { width: 220px; height: 220px; image-rendering: pixelated; background: white; border-radius: 6px; }
+
+.pinned-banner {
+    background: #1f1929;
+    border-bottom: 1px solid #3a3148;
+    padding: 6px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+}
+.pinned-banner.hidden { display: none; }
+.pinned-banner .pin-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    color: #d8dee9;
+    cursor: pointer;
+}
+.pinned-banner .pin-row:hover { color: #f1f1ff; }
+.pinned-banner .pin-row .icon { color: #c9a7ff; }
+.pinned-banner .pin-row .preview { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pinned-banner .pin-row .from { color: #6f7384; font-size: 10px; }
+html[data-theme="light"] .pinned-banner { background: #ece4ff; border-bottom-color: #d6c5ff; }
+html[data-theme="light"] .pinned-banner .pin-row { color: #1c1c24; }
+
+/* status dot variants */
+.dot.idle { background: #ffd166; }
+.dot.away { background: #6f7384; }
 
 /* ---------- confetti ---------- */
 #confetti-layer {

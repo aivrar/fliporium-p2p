@@ -16,6 +16,7 @@ const state = {
     flipsByPeer: new Map(),                      // peer -> Map<id, FlipRecord>
     showtimeByBooth: new Map(),                  // boothId -> { sessionId, flipId, leader, filename, mime, position, playing }
     notepadByBooth: new Map(),                   // boothId -> NotepadRecord
+    peerStatus: new Map(),                       // peerName -> "active"|"idle"|"away"
     replyingTo: null,                            // { uuid, text, peer } when composing a reply
     appState: "initializing",
 };
@@ -100,7 +101,17 @@ function renderFloor() {
             if (state.unread.has(p.name)) li.classList.add("unread");
 
             const dot = document.createElement("span");
-            dot.className = "dot " + (p.connected ? "connected" : p.tailnetOnline ? "online" : "offline");
+            // Status from peer-status events overrides "online" if available.
+            const liveStatus = state.peerStatus.get(p.name);
+            let dotClass = "offline";
+            if (p.connected) {
+                if (liveStatus === "idle") dotClass = "idle";
+                else if (liveStatus === "away") dotClass = "away";
+                else dotClass = "connected";
+            } else if (p.tailnetOnline) {
+                dotClass = "online";
+            }
+            dot.className = "dot " + dotClass;
             li.appendChild(dot);
 
             const name = document.createElement("span");
@@ -265,11 +276,53 @@ function renderMessage(m, container) {
         const replyBtn = button("↩", "reply", () => startReply(m));
         tb.appendChild(reactBtn);
         tb.appendChild(replyBtn);
+        tb.appendChild(button(m.pinned ? "📌" : "📍", m.pinned ? "unpin" : "pin", () => togglePin(m)));
         if (m.direction === "out") {
             tb.appendChild(button("✎", "edit", () => editMessageFlow(m)));
             tb.appendChild(button("🗑", "delete", () => deleteMessageFlow(m)));
         }
         li.appendChild(tb);
+    }
+}
+
+async function togglePin(m) {
+    if (!m.uuid) return;
+    try { await window.go.main.App.PinMessage(m.uuid, !m.pinned); }
+    catch (e) { toast("pin: " + e); }
+}
+
+function renderPinnedBanner() {
+    const banner = $("pinned-banner");
+    if (!banner) return;
+    if (!state.selection) { banner.classList.add("hidden"); return; }
+    const list = state.selection.kind === "booth"
+        ? (state.msgsByBooth.get(state.selection.key) || [])
+        : (state.msgsByPeer.get(state.selection.key) || []);
+    const pinned = list.filter(m => m.pinned && !m.deletedAt);
+    if (pinned.length === 0) { banner.classList.add("hidden"); banner.innerHTML = ""; return; }
+    banner.innerHTML = "";
+    for (const m of pinned) {
+        const row = document.createElement("div");
+        row.className = "pin-row";
+        const preview = (m.text || "").replace(/\s+/g, " ").slice(0, 100);
+        row.innerHTML = `
+            <span class="icon">📌</span>
+            <span class="preview">${escapeAttr(preview)}</span>
+            <span class="from">${escapeAttr(m.direction === "out" ? "me" : m.peer)}</span>
+        `;
+        row.addEventListener("click", () => jumpToMessage(m.uuid));
+        banner.appendChild(row);
+    }
+    banner.classList.remove("hidden");
+}
+
+function applyMessagePin(p) {
+    const found = findMessageEverywhere(p.uuid, p.boothId);
+    if (!found) return;
+    found.msg.pinned = !!p.pinned;
+    if ((p.boothId && isBoothSelected(p.boothId)) || (!p.boothId && isPeerSelected(found.peer || found.msg.peer))) {
+        renderMessage(found.msg, $("messages"));
+        renderPinnedBanner();
     }
 }
 
@@ -463,6 +516,7 @@ window.openFlipExt = openFlipExt;
 function renderChat() {
     const list = $("messages");
     list.innerHTML = "";
+    renderPinnedBanner();
     if (!state.selection) {
         $("chat-title").textContent = "select a peer or booth on The Floor";
         $("chat-state").textContent = "";
@@ -952,6 +1006,50 @@ function bindBackstage() {
         closeBackstage();
         showTour(0);
     });
+    $("bs-invite-go").addEventListener("click", async () => {
+        const key = $("bs-invite-key").value.trim();
+        if (!key) { toast("paste a pre-auth key first"); return; }
+        try {
+            const dataUrl = await window.go.main.App.GenerateInviteQR(key);
+            $("bs-invite-qr").innerHTML = `<img src="${dataUrl}" alt="invite QR">`;
+        } catch (e) { toast("QR: " + e); }
+    });
+}
+
+// ---------- status auto-detect ----------
+
+let statusTimer = null;
+let lastActivity = Date.now();
+
+function trackActivity() {
+    lastActivity = Date.now();
+    if (state.peerStatus.__self !== "active") {
+        state.peerStatus.__self = "active";
+        try { window.go.main.App.SetStatus("active"); } catch (e) {}
+    }
+}
+
+function evaluateStatus() {
+    const idleMs = Date.now() - lastActivity;
+    let next;
+    if (document.hidden) next = "away";
+    else if (idleMs > 15 * 60 * 1000) next = "away";
+    else if (idleMs > 5 * 60 * 1000) next = "idle";
+    else next = "active";
+    if (next !== state.peerStatus.__self) {
+        state.peerStatus.__self = next;
+        try { window.go.main.App.SetStatus(next); } catch (e) {}
+    }
+}
+
+function bindStatusTracking() {
+    ["mousemove", "keydown", "wheel", "touchstart"].forEach(ev => {
+        document.addEventListener(ev, trackActivity, { passive: true });
+    });
+    document.addEventListener("visibilitychange", evaluateStatus);
+    statusTimer = setInterval(evaluateStatus, 30 * 1000);
+    // Initial active broadcast once Wails runtime is up.
+    setTimeout(() => trackActivity(), 1000);
 }
 
 // ---------- theme ----------
@@ -1257,6 +1355,11 @@ function bindEvents() {
     window.runtime.EventsOn("reaction", (r) => applyReaction(r));
     window.runtime.EventsOn("message-edited", (e) => applyMessageEdit(e));
     window.runtime.EventsOn("message-deleted", (d) => applyMessageDelete(d));
+    window.runtime.EventsOn("message-pinned", (p) => applyMessagePin(p));
+    window.runtime.EventsOn("peer-status", (s) => {
+        state.peerStatus.set(s.peer, s.status);
+        renderFloor();
+    });
 
     window.runtime.EventsOn("flip", (f) => upsertFlip(f));
 
@@ -1315,6 +1418,7 @@ async function boot() {
     bindTour();
     bindDragDrop();
     bindEvents();
+    bindStatusTracking();
     renderSelf();
     refreshTwin();
     maybeShowTourOnBoot();

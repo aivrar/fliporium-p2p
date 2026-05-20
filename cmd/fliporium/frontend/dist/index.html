@@ -46,6 +46,7 @@
             <span id="chat-title">select a peer on The Floor</span>
             <span id="chat-state"></span>
         </div>
+        <div id="pinned-banner" class="pinned-banner hidden"></div>
         <div id="notepad-panel" class="hidden">
             <div class="header">
                 <span>NOTEPAD</span>
@@ -118,6 +119,15 @@
             <button id="bs-twin-clear" class="ghost">clear</button>
         </div>
         <div id="bs-twin-current" class="bs-hint"></div>
+    </section>
+    <section class="bs-section">
+        <h3>Invite a friend</h3>
+        <p class="bs-hint">Generate a QR code containing your Headscale server URL + a pre-auth key. Friend scans, joins your tailnet.</p>
+        <div class="bs-row">
+            <input id="bs-invite-key" placeholder="paste pre-auth key (hskey-auth-...)" autocomplete="off">
+            <button id="bs-invite-go">QR</button>
+        </div>
+        <div id="bs-invite-qr"></div>
     </section>
     <section class="bs-section">
         <h3>Help</h3>
