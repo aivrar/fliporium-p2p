@@ -1,0 +1,47 @@
+{
+	email christerfredrickson@gmail.com
+}
+
+# Headscale control plane.
+headscale.fliporium.com {
+	reverse_proxy 127.0.0.1:8080
+}
+
+# Marketing site, docs, and public stats.
+fliporium.com, www.fliporium.com {
+	root * /var/www/fliporium
+	encode gzip zstd
+
+	# Security headers.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "interest-cohort=()"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none';"
+	}
+
+	# Pretty URLs: /docs -> /docs.html (and same for privacy, stats).
+	@docs path /docs /docs/
+	rewrite @docs /docs.html
+	@privacy path /privacy /privacy/
+	rewrite @privacy /privacy.html
+	@stats path /stats /stats/
+	rewrite @stats /stats.html
+
+	# Stats API and download both go to the flipstats sidecar.
+	# `handle` (not handle_path) preserves the full request path -- flipstats
+	# expects /api/stats and /dl/fliporium.exe exactly as routed.
+	handle /api/stats {
+		reverse_proxy 127.0.0.1:8088
+	}
+	handle /dl/* {
+		reverse_proxy 127.0.0.1:8088
+	}
+
+	# Everything else: static file.
+	handle {
+		file_server
+	}
+}

@@ -1,0 +1,29 @@
+[Unit]
+Description=Fliporium public stats server
+Documentation=https://fliporium.com
+After=network-online.target headscale.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs as root so it can exec the headscale CLI which needs the sqlite at
+# /var/lib/headscale. Headscale itself runs as root on this box so this is
+# consistent with the rest of the stack.
+User=root
+ExecStart=/usr/local/bin/flipstats \
+  -listen 127.0.0.1:8088 \
+  -data /var/lib/flipstats \
+  -exe /var/www/fliporium/dl/fliporium.exe \
+  -headscale /usr/bin/headscale \
+  -headscale-cfg /etc/headscale/config.yaml
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
