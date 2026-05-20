@@ -201,12 +201,28 @@ func saveCounter(n int64) error {
 
 // ---------- headscale polling ----------
 
+// protoTimestamp matches Headscale's google.protobuf.Timestamp JSON shape.
+// The headscale CLI emits {"seconds": int64, "nanos": int32}, not RFC3339.
+type protoTimestamp struct {
+	Seconds int64 `json:"seconds"`
+	Nanos   int32 `json:"nanos"`
+}
+
+func (t protoTimestamp) Time() time.Time {
+	if t.Seconds <= 0 {
+		// Headscale uses {"seconds": -62135596800} to mean "unset" (Go's zero
+		// time). Treat as never-seen, well in the past.
+		return time.Time{}
+	}
+	return time.Unix(t.Seconds, int64(t.Nanos))
+}
+
 // headscaleNode is the subset of the headscale JSON output we care about.
 type headscaleNode struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	GivenName  string    `json:"given_name"`
-	LastSeen   time.Time `json:"last_seen"`
+	ID        int            `json:"id"`
+	Name      string         `json:"name"`
+	GivenName string         `json:"given_name"`
+	LastSeen  protoTimestamp `json:"last_seen"`
 }
 
 func pollLoop() {
@@ -231,7 +247,8 @@ func refreshNodes() error {
 	now := time.Now()
 	online := 0
 	for _, n := range nodes {
-		if now.Sub(n.LastSeen) <= onlineWindow {
+		last := n.LastSeen.Time()
+		if !last.IsZero() && now.Sub(last) <= onlineWindow {
 			online++
 		}
 	}
