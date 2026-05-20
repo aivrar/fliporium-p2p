@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const ProtocolVersion = "fliporium/0.9"
+const ProtocolVersion = "fliporium/0.10"
 
 type MessageType string
 
@@ -44,6 +44,11 @@ const (
 	// Twin Mode (v0.9): one Fliporium instance relays its own 1:1 chat
 	// history to a paired sibling instance owned by the same user.
 	TypeTwinSyncMessage MessageType = "TWIN_SYNC_MESSAGE"
+
+	// Round 1 (v0.10): chat ergonomics on top of MESSAGE.
+	TypeMessageReaction MessageType = "MESSAGE_REACTION"
+	TypeMessageEdit     MessageType = "MESSAGE_EDIT"
+	TypeMessageDelete   MessageType = "MESSAGE_DELETE"
 )
 
 type Envelope struct {
@@ -57,9 +62,40 @@ type Hello struct {
 }
 
 type Message struct {
-	Text    string    `json:"text"`
-	At      time.Time `json:"at"`
-	BoothID string    `json:"booth_id,omitempty"` // empty for 1:1
+	UUID       string    `json:"uuid,omitempty"`        // sender-assigned; empty == legacy / unaddressable
+	Text       string    `json:"text"`
+	At         time.Time `json:"at"`
+	BoothID    string    `json:"booth_id,omitempty"`    // empty for 1:1
+	ParentUUID string    `json:"parent_uuid,omitempty"` // reply target, optional
+}
+
+// MessageReaction adds (Action="add") or removes (Action="remove") an emoji
+// reaction on a previously-sent message.
+type MessageReaction struct {
+	MessageUUID string    `json:"message_uuid"`
+	Emoji       string    `json:"emoji"`
+	Action      string    `json:"action"` // "add" | "remove"
+	BoothID     string    `json:"booth_id,omitempty"`
+	At          time.Time `json:"at"`
+}
+
+// MessageEdit replaces the text of a previously-sent message. Only the
+// original sender's edits are honored (enforced by the receiver: the edit
+// must arrive over a connection whose remote name equals the original
+// message's "peer" with direction="in", i.e. they sent it to us).
+type MessageEdit struct {
+	MessageUUID string    `json:"message_uuid"`
+	Text        string    `json:"text"`
+	BoothID     string    `json:"booth_id,omitempty"`
+	At          time.Time `json:"at"`
+}
+
+// MessageDelete tombstones a previously-sent message. Same sender check as
+// MessageEdit.
+type MessageDelete struct {
+	MessageUUID string    `json:"message_uuid"`
+	BoothID     string    `json:"booth_id,omitempty"`
+	At          time.Time `json:"at"`
 }
 
 // BoothInvite seeds the recipient's local copy of a Booth.

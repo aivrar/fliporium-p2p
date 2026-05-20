@@ -28,13 +28,31 @@ const (
 // For a 1:1 conversation BoothID is empty and Peer is the conversation
 // partner. For a Booth message BoothID is set and Peer is the *sender*
 // (which can be us, in which case Direction is "out").
+//
+// UUID is the sender-assigned identifier used by reactions / edits / deletes /
+// replies. Legacy rows from before v0.10 have an empty UUID and can't be
+// addressed by those operations.
 type Message struct {
-	ID        int64
-	Peer      string
-	Direction string
-	Text      string
-	At        time.Time
-	BoothID   string
+	ID         int64
+	UUID       string
+	Peer       string
+	Direction  string
+	Text       string
+	At         time.Time
+	BoothID    string
+	ParentUUID string
+	EditedAt   time.Time // zero if never edited
+	DeletedAt  time.Time // zero if not tombstoned
+	Pinned     bool
+}
+
+// Reaction is one (message, peer, emoji) tuple. The same peer reacting with
+// the same emoji twice is idempotent.
+type Reaction struct {
+	MessageUUID string
+	Peer        string
+	Emoji       string
+	At          time.Time
 }
 
 // PeerRecord is what we remember about a peer between sessions.
@@ -136,16 +154,31 @@ CREATE TABLE IF NOT EXISTS peers (
 );
 
 CREATE TABLE IF NOT EXISTS messages (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    peer      TEXT NOT NULL,
-    direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
-    text      TEXT NOT NULL,
-    at        TEXT NOT NULL,
-    booth_id  TEXT
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    peer         TEXT NOT NULL,
+    direction    TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+    text         TEXT NOT NULL,
+    at           TEXT NOT NULL,
+    booth_id     TEXT,
+    uuid         TEXT,
+    parent_uuid  TEXT,
+    edited_at    TEXT,
+    deleted_at   TEXT,
+    pinned       INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_peer_at  ON messages(peer, at);
 CREATE INDEX IF NOT EXISTS idx_messages_booth_at ON messages(booth_id, at);
+CREATE INDEX IF NOT EXISTS idx_messages_uuid     ON messages(uuid) WHERE uuid IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS message_reactions (
+    message_uuid TEXT NOT NULL,
+    peer         TEXT NOT NULL,
+    emoji        TEXT NOT NULL,
+    at           TEXT NOT NULL,
+    PRIMARY KEY (message_uuid, peer, emoji)
+);
+CREATE INDEX IF NOT EXISTS idx_reactions_message ON message_reactions(message_uuid);
 
 CREATE TABLE IF NOT EXISTS booths (
     id         TEXT PRIMARY KEY,
@@ -196,11 +229,21 @@ func migrate(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return err
 	}
-	// Idempotent ALTER for stores predating Phase 6. SQLite errors with
-	// "duplicate column name" if the column is already there, which we ignore.
-	if _, err := db.Exec(`ALTER TABLE messages ADD COLUMN booth_id TEXT`); err != nil &&
-		!strings.Contains(err.Error(), "duplicate column name") {
-		return fmt.Errorf("migrate add messages.booth_id: %w", err)
+	// Idempotent ALTERs for stores that predate later phases. SQLite errors
+	// with "duplicate column name" if the column is already there, which we
+	// catch and ignore.
+	alters := []string{
+		`ALTER TABLE messages ADD COLUMN booth_id TEXT`,        // v0.6
+		`ALTER TABLE messages ADD COLUMN uuid TEXT`,            // v0.10
+		`ALTER TABLE messages ADD COLUMN parent_uuid TEXT`,     // v0.10
+		`ALTER TABLE messages ADD COLUMN edited_at TEXT`,       // v0.10
+		`ALTER TABLE messages ADD COLUMN deleted_at TEXT`,      // v0.10
+		`ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`, // v0.10
+	}
+	for _, stmt := range alters {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrate %q: %w", stmt, err)
+		}
 	}
 	return nil
 }
@@ -238,24 +281,182 @@ func (s *Store) Peers(ctx context.Context) ([]PeerRecord, error) {
 	return out, rows.Err()
 }
 
-// AppendMessage stores a single chat line. boothID may be empty for 1:1.
+// AppendMessage stores a single 1:1 chat line. boothID + UUID + parentUUID
+// are all empty.
 func (s *Store) AppendMessage(ctx context.Context, peer, direction, text string, at time.Time) error {
-	return s.AppendMessageBooth(ctx, peer, direction, text, "", at)
+	return s.AppendMessageFull(ctx, Message{Peer: peer, Direction: direction, Text: text, At: at})
 }
 
-// AppendMessageBooth is the booth-aware variant of AppendMessage.
+// AppendMessageBooth is the booth-aware variant; UUID + parentUUID empty.
 func (s *Store) AppendMessageBooth(ctx context.Context, peer, direction, text, boothID string, at time.Time) error {
-	if direction != DirectionIn && direction != DirectionOut {
-		return fmt.Errorf("invalid direction %q", direction)
+	return s.AppendMessageFull(ctx, Message{Peer: peer, Direction: direction, Text: text, At: at, BoothID: boothID})
+}
+
+// AppendMessageFull persists a Message including UUID and ParentUUID.
+// Idempotent on UUID: if a row with this UUID already exists, no-op (returns nil).
+func (s *Store) AppendMessageFull(ctx context.Context, m Message) error {
+	if m.Direction != DirectionIn && m.Direction != DirectionOut {
+		return fmt.Errorf("invalid direction %q", m.Direction)
 	}
-	var boothCol *string
-	if boothID != "" {
-		boothCol = &boothID
+	var boothCol, uuidCol, parentCol *string
+	if m.BoothID != "" {
+		boothCol = &m.BoothID
+	}
+	if m.UUID != "" {
+		uuidCol = &m.UUID
+		// Idempotency: skip if we already have this row by UUID.
+		var existing int
+		if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM messages WHERE uuid = ?`, m.UUID).Scan(&existing); err == nil {
+			return nil
+		}
+	}
+	if m.ParentUUID != "" {
+		parentCol = &m.ParentUUID
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO messages (peer, direction, text, at, booth_id) VALUES (?, ?, ?, ?, ?)
-	`, peer, direction, text, at.UTC().Format(time.RFC3339Nano), boothCol)
+		INSERT INTO messages (peer, direction, text, at, booth_id, uuid, parent_uuid)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, m.Peer, m.Direction, m.Text, m.At.UTC().Format(time.RFC3339Nano), boothCol, uuidCol, parentCol)
 	return err
+}
+
+// ApplyMessageEdit replaces text on the message with the given UUID and
+// stamps edited_at. No-op if no such message. Returns whether a row was
+// updated.
+func (s *Store) ApplyMessageEdit(ctx context.Context, uuid, newText string, editedAt time.Time) (bool, error) {
+	if uuid == "" {
+		return false, fmt.Errorf("uuid required")
+	}
+	if editedAt.IsZero() {
+		editedAt = time.Now().UTC()
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE messages SET text = ?, edited_at = ?
+		WHERE uuid = ? AND (edited_at IS NULL OR edited_at < ?)
+	`, newText, editedAt.UTC().Format(time.RFC3339Nano), uuid, editedAt.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ApplyMessageDelete tombstones the message with the given UUID.
+func (s *Store) ApplyMessageDelete(ctx context.Context, uuid string, deletedAt time.Time) (bool, error) {
+	if uuid == "" {
+		return false, fmt.Errorf("uuid required")
+	}
+	if deletedAt.IsZero() {
+		deletedAt = time.Now().UTC()
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE messages SET deleted_at = ? WHERE uuid = ? AND deleted_at IS NULL
+	`, deletedAt.UTC().Format(time.RFC3339Nano), uuid)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// SetMessagePinned toggles the pinned flag on a message by UUID.
+func (s *Store) SetMessagePinned(ctx context.Context, uuid string, pinned bool) error {
+	if uuid == "" {
+		return fmt.Errorf("uuid required")
+	}
+	val := 0
+	if pinned {
+		val = 1
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE messages SET pinned = ? WHERE uuid = ?`, val, uuid)
+	return err
+}
+
+// AddReaction is idempotent — if (uuid, peer, emoji) already exists, no-op.
+func (s *Store) AddReaction(ctx context.Context, r Reaction) error {
+	if r.MessageUUID == "" || r.Peer == "" || r.Emoji == "" {
+		return fmt.Errorf("uuid, peer, emoji required")
+	}
+	if r.At.IsZero() {
+		r.At = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO message_reactions (message_uuid, peer, emoji, at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (message_uuid, peer, emoji) DO NOTHING
+	`, r.MessageUUID, r.Peer, r.Emoji, r.At.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+// RemoveReaction removes a (uuid, peer, emoji) reaction row.
+func (s *Store) RemoveReaction(ctx context.Context, messageUUID, peer, emoji string) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM message_reactions WHERE message_uuid = ? AND peer = ? AND emoji = ?
+	`, messageUUID, peer, emoji)
+	return err
+}
+
+// ReactionsForMessages bulk-loads reactions for a list of message UUIDs.
+// Returns a map keyed by message UUID.
+func (s *Store) ReactionsForMessages(ctx context.Context, uuids []string) (map[string][]Reaction, error) {
+	out := map[string][]Reaction{}
+	if len(uuids) == 0 {
+		return out, nil
+	}
+	placeholders := strings.Repeat("?,", len(uuids))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(uuids))
+	for i, u := range uuids {
+		args[i] = u
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT message_uuid, peer, emoji, at FROM message_reactions WHERE message_uuid IN (`+placeholders+`) ORDER BY at ASC`,
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r Reaction
+		var atStr string
+		if err := rows.Scan(&r.MessageUUID, &r.Peer, &r.Emoji, &atStr); err != nil {
+			return nil, err
+		}
+		r.At, _ = time.Parse(time.RFC3339Nano, atStr)
+		out[r.MessageUUID] = append(out[r.MessageUUID], r)
+	}
+	return out, rows.Err()
+}
+
+// FindMessageByUUID looks up a single message; useful for the edit/delete
+// sender-verification check and for jump-to-message search results.
+func (s *Store) FindMessageByUUID(ctx context.Context, uuid string) (Message, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, COALESCE(uuid,''), peer, direction, text, at, COALESCE(booth_id,''),
+		       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''),
+		       COALESCE(pinned, 0)
+		FROM messages WHERE uuid = ?
+	`, uuid)
+	return scanFullMessage(row)
+}
+
+// scanFullMessage scans one full Message row.
+func scanFullMessage(row *sql.Row) (Message, error) {
+	var m Message
+	var atStr, editedStr, deletedStr string
+	var pinnedInt int
+	if err := row.Scan(&m.ID, &m.UUID, &m.Peer, &m.Direction, &m.Text, &atStr, &m.BoothID, &m.ParentUUID, &editedStr, &deletedStr, &pinnedInt); err != nil {
+		return Message{}, err
+	}
+	m.At, _ = time.Parse(time.RFC3339Nano, atStr)
+	if editedStr != "" {
+		m.EditedAt, _ = time.Parse(time.RFC3339Nano, editedStr)
+	}
+	if deletedStr != "" {
+		m.DeletedAt, _ = time.Parse(time.RFC3339Nano, deletedStr)
+	}
+	m.Pinned = pinnedInt != 0
+	return m, nil
 }
 
 // AppendFlip records a brand-new transfer (status = started).
@@ -364,15 +565,19 @@ func (s *Store) Messages(ctx context.Context, peer string, limit int) ([]Message
 	var err error
 	if limit > 0 {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, peer, direction, text, at, COALESCE(booth_id, '') FROM (
-				SELECT id, peer, direction, text, at, booth_id
+			SELECT id, COALESCE(uuid,''), peer, direction, text, at, COALESCE(booth_id, ''),
+			       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''), COALESCE(pinned, 0)
+			FROM (
+				SELECT id, uuid, peer, direction, text, at, booth_id, parent_uuid, edited_at, deleted_at, pinned
 				FROM messages WHERE peer = ? AND booth_id IS NULL
 				ORDER BY id DESC LIMIT ?
 			) ORDER BY id ASC
 		`, peer, limit)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, peer, direction, text, at, COALESCE(booth_id, '') FROM messages
+			SELECT id, COALESCE(uuid,''), peer, direction, text, at, COALESCE(booth_id, ''),
+			       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''), COALESCE(pinned, 0)
+			FROM messages
 			WHERE peer = ? AND booth_id IS NULL ORDER BY id ASC
 		`, peer)
 	}
@@ -389,15 +594,19 @@ func (s *Store) MessagesByBooth(ctx context.Context, boothID string, limit int) 
 	var err error
 	if limit > 0 {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, peer, direction, text, at, COALESCE(booth_id, '') FROM (
-				SELECT id, peer, direction, text, at, booth_id
+			SELECT id, COALESCE(uuid,''), peer, direction, text, at, COALESCE(booth_id, ''),
+			       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''), COALESCE(pinned, 0)
+			FROM (
+				SELECT id, uuid, peer, direction, text, at, booth_id, parent_uuid, edited_at, deleted_at, pinned
 				FROM messages WHERE booth_id = ?
 				ORDER BY id DESC LIMIT ?
 			) ORDER BY id ASC
 		`, boothID, limit)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, peer, direction, text, at, COALESCE(booth_id, '') FROM messages
+			SELECT id, COALESCE(uuid,''), peer, direction, text, at, COALESCE(booth_id, ''),
+			       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''), COALESCE(pinned, 0)
+			FROM messages
 			WHERE booth_id = ? ORDER BY id ASC
 		`, boothID)
 	}
@@ -412,11 +621,19 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 	var out []Message
 	for rows.Next() {
 		var m Message
-		var atStr string
-		if err := rows.Scan(&m.ID, &m.Peer, &m.Direction, &m.Text, &atStr, &m.BoothID); err != nil {
+		var atStr, editedStr, deletedStr string
+		var pinnedInt int
+		if err := rows.Scan(&m.ID, &m.UUID, &m.Peer, &m.Direction, &m.Text, &atStr, &m.BoothID, &m.ParentUUID, &editedStr, &deletedStr, &pinnedInt); err != nil {
 			return nil, err
 		}
 		m.At, _ = time.Parse(time.RFC3339Nano, atStr)
+		if editedStr != "" {
+			m.EditedAt, _ = time.Parse(time.RFC3339Nano, editedStr)
+		}
+		if deletedStr != "" {
+			m.DeletedAt, _ = time.Parse(time.RFC3339Nano, deletedStr)
+		}
+		m.Pinned = pinnedInt != 0
 		out = append(out, m)
 	}
 	return out, rows.Err()

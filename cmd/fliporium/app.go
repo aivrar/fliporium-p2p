@@ -54,13 +54,80 @@ type PeerInfo struct {
 
 // MessageRecord is one persisted chat line as the frontend sees it.
 type MessageRecord struct {
-	ID        int64  `json:"id"`
-	Peer      string `json:"peer"`
-	Direction string `json:"direction"`
-	Text      string `json:"text"`
-	At        string `json:"at"`
-	BoothID   string `json:"boothId,omitempty"`
+	ID         int64              `json:"id"`
+	UUID       string             `json:"uuid,omitempty"`
+	Peer       string             `json:"peer"`
+	Direction  string             `json:"direction"`
+	Text       string             `json:"text"`
+	At         string             `json:"at"`
+	BoothID    string             `json:"boothId,omitempty"`
+	ParentUUID string             `json:"parentUuid,omitempty"`
+	EditedAt   string             `json:"editedAt,omitempty"`
+	DeletedAt  string             `json:"deletedAt,omitempty"`
+	Pinned     bool               `json:"pinned,omitempty"`
+	Reactions  map[string][]string `json:"reactions,omitempty"` // emoji -> peer-names
 }
+
+func toMessageRecord(m store.Message) MessageRecord {
+	r := MessageRecord{
+		ID:         m.ID,
+		UUID:       m.UUID,
+		Peer:       m.Peer,
+		Direction:  m.Direction,
+		Text:       m.Text,
+		At:         m.At.UTC().Format(time.RFC3339Nano),
+		BoothID:    m.BoothID,
+		ParentUUID: m.ParentUUID,
+		Pinned:     m.Pinned,
+	}
+	if !m.EditedAt.IsZero() {
+		r.EditedAt = m.EditedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if !m.DeletedAt.IsZero() {
+		r.DeletedAt = m.DeletedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return r
+}
+
+func collectUUIDs(msgs []store.Message) []string {
+	out := []string{}
+	for _, m := range msgs {
+		if m.UUID != "" {
+			out = append(out, m.UUID)
+		}
+	}
+	return out
+}
+
+// attachReactions decorates a slice of MessageRecord with reactions in bulk.
+func (a *App) attachReactions(records []MessageRecord, msgs []store.Message) {
+	uuids := collectUUIDs(msgs)
+	if len(uuids) == 0 {
+		return
+	}
+	byUUID, err := a.store.ReactionsForMessages(a.ctx, uuids)
+	if err != nil || len(byUUID) == 0 {
+		return
+	}
+	for i := range records {
+		if records[i].UUID == "" {
+			continue
+		}
+		rs := byUUID[records[i].UUID]
+		if len(rs) == 0 {
+			continue
+		}
+		m := map[string][]string{}
+		for _, r := range rs {
+			m[r.Emoji] = append(m[r.Emoji], r.Peer)
+		}
+		records[i].Reactions = m
+	}
+}
+
+// newUUID returns a v4 UUID. (Same algorithm as the booth/flip helpers; kept
+// inline so the call sites stay self-contained.)
+func newUUID() (string, error) { return newBoothID() }
 
 // BoothRecord is a Booth surfaced to the frontend.
 type BoothRecord struct {
@@ -275,16 +342,24 @@ func (a *App) eventPump() {
 		case peer.EventMessage:
 			at := ev.At
 			boothID := ""
+			uuid := ""
+			parentUUID := ""
 			if md, ok := ev.Data.(*peer.MessageEventData); ok && md != nil {
 				boothID = md.BoothID
+				uuid = md.UUID
+				parentUUID = md.ParentUUID
 			}
-			_ = a.store.AppendMessageBooth(a.ctx, ev.Peer, store.DirectionIn, ev.Text, boothID, at)
+			_ = a.store.AppendMessageFull(a.ctx, store.Message{
+				UUID: uuid, Peer: ev.Peer, Direction: store.DirectionIn, Text: ev.Text, At: at, BoothID: boothID, ParentUUID: parentUUID,
+			})
 			wailsruntime.EventsEmit(a.ctx, "message", MessageRecord{
-				Peer:      ev.Peer,
-				Direction: store.DirectionIn,
-				Text:      ev.Text,
-				At:        at.UTC().Format(time.RFC3339Nano),
-				BoothID:   boothID,
+				UUID:       uuid,
+				Peer:       ev.Peer,
+				Direction:  store.DirectionIn,
+				Text:       ev.Text,
+				At:         at.UTC().Format(time.RFC3339Nano),
+				BoothID:    boothID,
+				ParentUUID: parentUUID,
 			})
 			// Twin relay: if we have a paired twin and this is a 1:1, send
 			// the same row to our twin so both devices share history.
@@ -294,6 +369,57 @@ func (a *App) eventPump() {
 					Direction:    store.DirectionIn,
 					Text:         ev.Text,
 					At:           at,
+				})
+			}
+		case peer.EventMessageReaction:
+			r, _ := ev.Data.(*peer.MessageReaction)
+			if r == nil {
+				continue
+			}
+			if r.Action == "remove" {
+				_ = a.store.RemoveReaction(a.ctx, r.MessageUUID, ev.Peer, r.Emoji)
+			} else {
+				_ = a.store.AddReaction(a.ctx, store.Reaction{MessageUUID: r.MessageUUID, Peer: ev.Peer, Emoji: r.Emoji, At: r.At})
+			}
+			wailsruntime.EventsEmit(a.ctx, "reaction", map[string]any{
+				"uuid": r.MessageUUID, "emoji": r.Emoji, "peer": ev.Peer, "action": r.Action, "boothId": r.BoothID,
+			})
+		case peer.EventMessageEdit:
+			e, _ := ev.Data.(*peer.MessageEdit)
+			if e == nil {
+				continue
+			}
+			// Sender check: the original message's peer column (we stored the
+			// sender as Peer with direction=in) must match the connection's
+			// peer. Otherwise reject — someone else trying to edit a message
+			// they didn't author.
+			orig, ferr := a.store.FindMessageByUUID(a.ctx, e.MessageUUID)
+			if ferr != nil {
+				continue
+			}
+			if orig.Direction != store.DirectionIn || orig.Peer != ev.Peer {
+				continue
+			}
+			if applied, _ := a.store.ApplyMessageEdit(a.ctx, e.MessageUUID, e.Text, e.At); applied {
+				wailsruntime.EventsEmit(a.ctx, "message-edited", map[string]any{
+					"uuid": e.MessageUUID, "text": e.Text, "boothId": e.BoothID, "editedAt": e.At.UTC().Format(time.RFC3339Nano),
+				})
+			}
+		case peer.EventMessageDelete:
+			d, _ := ev.Data.(*peer.MessageDelete)
+			if d == nil {
+				continue
+			}
+			orig, ferr := a.store.FindMessageByUUID(a.ctx, d.MessageUUID)
+			if ferr != nil {
+				continue
+			}
+			if orig.Direction != store.DirectionIn || orig.Peer != ev.Peer {
+				continue
+			}
+			if applied, _ := a.store.ApplyMessageDelete(a.ctx, d.MessageUUID, d.At); applied {
+				wailsruntime.EventsEmit(a.ctx, "message-deleted", map[string]any{
+					"uuid": d.MessageUUID, "boothId": d.BoothID, "deletedAt": d.At.UTC().Format(time.RFC3339Nano),
 				})
 			}
 		case peer.EventInfo:
@@ -591,20 +717,20 @@ func (a *App) ListMessages(peerName string, limit int) ([]MessageRecord, error) 
 	}
 	out := make([]MessageRecord, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, MessageRecord{
-			ID:        m.ID,
-			Peer:      m.Peer,
-			Direction: m.Direction,
-			Text:      m.Text,
-			At:        m.At.UTC().Format(time.RFC3339Nano),
-		})
+		out = append(out, toMessageRecord(m))
 	}
+	a.attachReactions(out, msgs)
 	return out, nil
 }
 
 // SendMessage delivers a 1:1 chat line to a peer we're connected to, stores
-// it locally as an outbound row, and emits a message event so the UI shows it.
+// it locally as an outbound row with a fresh UUID, and emits a message event.
 func (a *App) SendMessage(peerName, text string) error {
+	return a.SendReply(peerName, text, "")
+}
+
+// SendReply is SendMessage with an optional parent message UUID.
+func (a *App) SendReply(peerName, text, parentUUID string) error {
 	if a.hub == nil {
 		return fmt.Errorf("hub not ready")
 	}
@@ -612,26 +738,171 @@ func (a *App) SendMessage(peerName, text string) error {
 	if text == "" {
 		return fmt.Errorf("empty message")
 	}
-	if err := a.hub.Send(peerName, text); err != nil {
+	uuid, err := newUUID()
+	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()
-	if err := a.store.AppendMessage(a.ctx, peerName, store.DirectionOut, text, now); err != nil {
+	c := a.hub.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("not connected to %s", peerName)
+	}
+	if err := c.WriteFrame(peer.TypeMessage, peer.Message{UUID: uuid, Text: text, At: now, ParentUUID: parentUUID}); err != nil {
+		return err
+	}
+	if err := a.store.AppendMessageFull(a.ctx, store.Message{
+		UUID: uuid, Peer: peerName, Direction: store.DirectionOut, Text: text, At: now, ParentUUID: parentUUID,
+	}); err != nil {
 		log.Printf("append out message: %v", err)
 	}
 	wailsruntime.EventsEmit(a.ctx, "message", MessageRecord{
-		Peer:      peerName,
-		Direction: store.DirectionOut,
-		Text:      text,
-		At:        now.Format(time.RFC3339Nano),
+		UUID: uuid, Peer: peerName, Direction: store.DirectionOut, Text: text,
+		At: now.Format(time.RFC3339Nano), ParentUUID: parentUUID,
 	})
 	a.relayToTwin(peer.TwinSyncMessage{
-		OriginalPeer: peerName,
-		Direction:    store.DirectionOut,
-		Text:         text,
-		At:           now,
+		OriginalPeer: peerName, Direction: store.DirectionOut, Text: text, At: now,
 	})
 	return nil
+}
+
+// EditMessage replaces the text of one of our own previously-sent messages
+// and broadcasts the edit to its recipients. Returns error if the message
+// wasn't sent by us.
+func (a *App) EditMessage(uuid, newText string) error {
+	if a.hub == nil || a.store == nil {
+		return fmt.Errorf("app not ready")
+	}
+	if uuid == "" || strings.TrimSpace(newText) == "" {
+		return fmt.Errorf("uuid and non-empty text required")
+	}
+	orig, err := a.store.FindMessageByUUID(a.ctx, uuid)
+	if err != nil {
+		return fmt.Errorf("no such message")
+	}
+	if orig.Direction != store.DirectionOut {
+		return fmt.Errorf("can only edit your own messages")
+	}
+	if !orig.DeletedAt.IsZero() {
+		return fmt.Errorf("message already deleted")
+	}
+	now := time.Now().UTC()
+	if _, err := a.store.ApplyMessageEdit(a.ctx, uuid, newText, now); err != nil {
+		return err
+	}
+	edit := peer.MessageEdit{MessageUUID: uuid, Text: newText, BoothID: orig.BoothID, At: now}
+	if orig.BoothID != "" {
+		members, _ := a.store.BoothMembers(a.ctx, orig.BoothID)
+		for _, m := range members {
+			if m.PeerName == a.hostname {
+				continue
+			}
+			if a.hub.Get(m.PeerName) != nil {
+				_ = a.hub.SendMessageEdit(m.PeerName, edit)
+			}
+		}
+	} else {
+		if a.hub.Get(orig.Peer) != nil {
+			_ = a.hub.SendMessageEdit(orig.Peer, edit)
+		}
+	}
+	wailsruntime.EventsEmit(a.ctx, "message-edited", map[string]any{
+		"uuid": uuid, "text": newText, "boothId": orig.BoothID, "editedAt": now.Format(time.RFC3339Nano),
+	})
+	return nil
+}
+
+// DeleteMessage tombstones one of our own messages and broadcasts the delete.
+func (a *App) DeleteMessage(uuid string) error {
+	if a.hub == nil || a.store == nil {
+		return fmt.Errorf("app not ready")
+	}
+	if uuid == "" {
+		return fmt.Errorf("uuid required")
+	}
+	orig, err := a.store.FindMessageByUUID(a.ctx, uuid)
+	if err != nil {
+		return fmt.Errorf("no such message")
+	}
+	if orig.Direction != store.DirectionOut {
+		return fmt.Errorf("can only delete your own messages")
+	}
+	now := time.Now().UTC()
+	if _, err := a.store.ApplyMessageDelete(a.ctx, uuid, now); err != nil {
+		return err
+	}
+	d := peer.MessageDelete{MessageUUID: uuid, BoothID: orig.BoothID, At: now}
+	if orig.BoothID != "" {
+		members, _ := a.store.BoothMembers(a.ctx, orig.BoothID)
+		for _, m := range members {
+			if m.PeerName == a.hostname {
+				continue
+			}
+			if a.hub.Get(m.PeerName) != nil {
+				_ = a.hub.SendMessageDelete(m.PeerName, d)
+			}
+		}
+	} else {
+		if a.hub.Get(orig.Peer) != nil {
+			_ = a.hub.SendMessageDelete(orig.Peer, d)
+		}
+	}
+	wailsruntime.EventsEmit(a.ctx, "message-deleted", map[string]any{
+		"uuid": uuid, "boothId": orig.BoothID, "deletedAt": now.Format(time.RFC3339Nano),
+	})
+	return nil
+}
+
+// ToggleReaction toggles an emoji reaction by the local user on a message.
+// Returns the new state ("added" or "removed").
+func (a *App) ToggleReaction(messageUUID, emoji string) (string, error) {
+	if a.hub == nil || a.store == nil {
+		return "", fmt.Errorf("app not ready")
+	}
+	if messageUUID == "" || emoji == "" {
+		return "", fmt.Errorf("uuid + emoji required")
+	}
+	orig, err := a.store.FindMessageByUUID(a.ctx, messageUUID)
+	if err != nil {
+		return "", fmt.Errorf("no such message")
+	}
+	// Check existing
+	existing, _ := a.store.ReactionsForMessages(a.ctx, []string{messageUUID})
+	has := false
+	for _, r := range existing[messageUUID] {
+		if r.Peer == a.hostname && r.Emoji == emoji {
+			has = true
+			break
+		}
+	}
+	now := time.Now().UTC()
+	action := "add"
+	if has {
+		action = "remove"
+		_ = a.store.RemoveReaction(a.ctx, messageUUID, a.hostname, emoji)
+	} else {
+		_ = a.store.AddReaction(a.ctx, store.Reaction{MessageUUID: messageUUID, Peer: a.hostname, Emoji: emoji, At: now})
+	}
+	r := peer.MessageReaction{MessageUUID: messageUUID, Emoji: emoji, Action: action, BoothID: orig.BoothID, At: now}
+	if orig.BoothID != "" {
+		members, _ := a.store.BoothMembers(a.ctx, orig.BoothID)
+		for _, m := range members {
+			if m.PeerName == a.hostname {
+				continue
+			}
+			if a.hub.Get(m.PeerName) != nil {
+				_ = a.hub.SendMessageReaction(m.PeerName, r)
+			}
+		}
+	} else {
+		if a.hub.Get(orig.Peer) != nil {
+			_ = a.hub.SendMessageReaction(orig.Peer, r)
+		}
+	}
+	wailsruntime.EventsEmit(a.ctx, "reaction", map[string]any{
+		"uuid": messageUUID, "emoji": emoji, "peer": a.hostname, "action": action,
+		"boothId": orig.BoothID,
+	})
+	return action, nil
 }
 
 // relayToTwin sends a 1:1 chat row to the paired twin (if one is set and
@@ -763,15 +1034,9 @@ func (a *App) ListBoothMessages(boothID string, limit int) ([]MessageRecord, err
 	}
 	out := make([]MessageRecord, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, MessageRecord{
-			ID:        m.ID,
-			Peer:      m.Peer,
-			Direction: m.Direction,
-			Text:      m.Text,
-			At:        m.At.UTC().Format(time.RFC3339Nano),
-			BoothID:   m.BoothID,
-		})
+		out = append(out, toMessageRecord(m))
 	}
+	a.attachReactions(out, msgs)
 	return out, nil
 }
 

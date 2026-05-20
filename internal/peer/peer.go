@@ -106,11 +106,18 @@ const (
 	EventNotepadUpdated HubEventKind = "notepad-updated"
 
 	EventTwinSyncedMessage HubEventKind = "twin-synced-message"
+
+	EventMessageReaction HubEventKind = "message-reaction"
+	EventMessageEdit     HubEventKind = "message-edit"
+	EventMessageDelete   HubEventKind = "message-delete"
 )
 
-// MessageEventData accompanies EventMessage so the app layer can route by Booth.
+// MessageEventData accompanies EventMessage so the app layer can route by Booth
+// and address messages by UUID for reactions / edits / deletes.
 type MessageEventData struct {
-	BoothID string
+	BoothID    string
+	UUID       string
+	ParentUUID string
 }
 
 // FlipEventData is the structured payload attached to Event Flip* events.
@@ -273,6 +280,33 @@ func (h *Hub) SendTwinSyncMessage(peerName string, m TwinSyncMessage) error {
 	return c.WriteFrame(TypeTwinSyncMessage, m)
 }
 
+// SendMessageReaction broadcasts a single reaction add/remove.
+func (h *Hub) SendMessageReaction(peerName string, r MessageReaction) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypeMessageReaction, r)
+}
+
+// SendMessageEdit broadcasts an edit to a previously-sent message.
+func (h *Hub) SendMessageEdit(peerName string, e MessageEdit) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypeMessageEdit, e)
+}
+
+// SendMessageDelete broadcasts a tombstone for a previously-sent message.
+func (h *Hub) SendMessageDelete(peerName string, d MessageDelete) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypeMessageDelete, d)
+}
+
 // ByeAll sends BYE to every peer and closes their connections.
 func (h *Hub) ByeAll(reason string) {
 	h.mu.RLock()
@@ -308,7 +342,10 @@ func (h *Hub) runLoop(c *PeerConn) {
 			if err := json.Unmarshal(env.Body, &m); err != nil {
 				continue
 			}
-			h.emit(HubEvent{Kind: EventMessage, Peer: c.Name, Text: m.Text, Data: &MessageEventData{BoothID: m.BoothID}})
+			h.emit(HubEvent{
+				Kind: EventMessage, Peer: c.Name, Text: m.Text,
+				Data: &MessageEventData{BoothID: m.BoothID, UUID: m.UUID, ParentUUID: m.ParentUUID},
+			})
 		case TypeBye:
 			var b Bye
 			_ = json.Unmarshal(env.Body, &b)
@@ -369,6 +406,21 @@ func (h *Hub) runLoop(c *PeerConn) {
 			var t TwinSyncMessage
 			if err := json.Unmarshal(env.Body, &t); err == nil {
 				h.emit(HubEvent{Kind: EventTwinSyncedMessage, Peer: c.Name, Data: &t})
+			}
+		case TypeMessageReaction:
+			var r MessageReaction
+			if err := json.Unmarshal(env.Body, &r); err == nil {
+				h.emit(HubEvent{Kind: EventMessageReaction, Peer: c.Name, Data: &r})
+			}
+		case TypeMessageEdit:
+			var e MessageEdit
+			if err := json.Unmarshal(env.Body, &e); err == nil {
+				h.emit(HubEvent{Kind: EventMessageEdit, Peer: c.Name, Data: &e})
+			}
+		case TypeMessageDelete:
+			var d MessageDelete
+			if err := json.Unmarshal(env.Body, &d); err == nil {
+				h.emit(HubEvent{Kind: EventMessageDelete, Peer: c.Name, Data: &d})
 			}
 		}
 	}

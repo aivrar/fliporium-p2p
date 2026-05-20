@@ -16,8 +16,11 @@ const state = {
     flipsByPeer: new Map(),                      // peer -> Map<id, FlipRecord>
     showtimeByBooth: new Map(),                  // boothId -> { sessionId, flipId, leader, filename, mime, position, playing }
     notepadByBooth: new Map(),                   // boothId -> NotepadRecord
+    replyingTo: null,                            // { uuid, text, peer } when composing a reply
     appState: "initializing",
 };
+
+const QUICK_REACTIONS = ["👍","❤️","😂","🎉","🔥","🙏"];
 
 let notepadDebounce = null;
 const NOTEPAD_DEBOUNCE_MS = 500;
@@ -194,20 +197,147 @@ function timelineForBooth(boothID) {
     return items;
 }
 
+function findMessageByUUID(uuid) {
+    if (!state.selection) return null;
+    if (state.selection.kind === "booth") {
+        const list = state.msgsByBooth.get(state.selection.key) || [];
+        return list.find(m => m.uuid === uuid) || null;
+    }
+    const list = state.msgsByPeer.get(state.selection.key) || [];
+    return list.find(m => m.uuid === uuid) || null;
+}
+
 function renderMessage(m, container) {
-    const li = document.createElement("li");
+    // Reuse an existing <li> if we're updating the same UUID in place.
+    let li = m.uuid ? container.querySelector(`[data-msg="${escapeAttr(m.uuid)}"]`) : null;
+    if (!li) {
+        li = document.createElement("li");
+        if (m.uuid) li.dataset.msg = m.uuid;
+        container.appendChild(li);
+    }
     li.className = "msg " + (m.direction === "out" ? "out" : m.direction === "info" ? "info" : "in");
+    if (m.deletedAt) li.classList.add("deleted");
+    li.innerHTML = "";
+
     if (m.direction !== "info") {
         const meta = document.createElement("div");
         meta.className = "meta";
-        meta.textContent = (m.direction === "out" ? "me" : m.peer) + " - " + shortTime(m.at);
+        const editedTag = m.editedAt && !m.deletedAt ? ` <span class="edited-tag">(edited)</span>` : "";
+        meta.innerHTML = (m.direction === "out" ? "me" : escapeAttr(m.peer)) + " - " + escapeAttr(shortTime(m.at)) + editedTag;
         li.appendChild(meta);
     }
+
+    if (m.parentUuid) {
+        const parent = findMessageByUUID(m.parentUuid);
+        const chip = document.createElement("div");
+        chip.className = "reply-chip";
+        const preview = parent ? (parent.text || "").replace(/\s+/g, " ").slice(0, 80) : "(message)";
+        chip.textContent = "↳ " + preview;
+        if (parent) chip.addEventListener("click", () => jumpToMessage(parent.uuid));
+        li.appendChild(chip);
+    }
+
     const body = document.createElement("div");
     body.className = "body";
-    body.innerHTML = renderMarkdown(m.text);
+    body.innerHTML = m.deletedAt ? "[deleted]" : renderMarkdown(m.text || "");
     li.appendChild(body);
-    container.appendChild(li);
+
+    // Reactions
+    if (m.reactions && Object.keys(m.reactions).length) {
+        const wrap = document.createElement("div");
+        wrap.className = "msg-reactions";
+        for (const [emoji, peers] of Object.entries(m.reactions)) {
+            const btn = document.createElement("button");
+            btn.className = "msg-reaction" + (peers.includes(state.self?.hostname) ? " mine" : "");
+            btn.textContent = emoji + " " + peers.length;
+            btn.title = peers.join(", ");
+            btn.addEventListener("click", (e) => { e.stopPropagation(); toggleReaction(m.uuid, emoji); });
+            wrap.appendChild(btn);
+        }
+        li.appendChild(wrap);
+    }
+
+    // Toolbar (only for non-info, non-deleted messages with a UUID)
+    if (m.direction !== "info" && !m.deletedAt && m.uuid) {
+        const tb = document.createElement("div");
+        tb.className = "msg-toolbar";
+        const reactBtn = button("☺", "react", () => openReactionPicker(li, m));
+        const replyBtn = button("↩", "reply", () => startReply(m));
+        tb.appendChild(reactBtn);
+        tb.appendChild(replyBtn);
+        if (m.direction === "out") {
+            tb.appendChild(button("✎", "edit", () => editMessageFlow(m)));
+            tb.appendChild(button("🗑", "delete", () => deleteMessageFlow(m)));
+        }
+        li.appendChild(tb);
+    }
+}
+
+function button(label, title, onclick) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener("click", (e) => { e.stopPropagation(); onclick(); });
+    return b;
+}
+
+function openReactionPicker(anchor, m) {
+    // Remove any existing picker
+    document.querySelectorAll(".reaction-picker").forEach(el => el.remove());
+    const picker = document.createElement("div");
+    picker.className = "reaction-picker";
+    for (const emoji of QUICK_REACTIONS) {
+        const b = document.createElement("button");
+        b.textContent = emoji;
+        b.addEventListener("click", (e) => { e.stopPropagation(); toggleReaction(m.uuid, emoji); picker.remove(); });
+        picker.appendChild(b);
+    }
+    anchor.appendChild(picker);
+    // dismiss on outside click
+    setTimeout(() => {
+        const onAway = (e) => { if (!picker.contains(e.target)) { picker.remove(); document.removeEventListener("click", onAway, true); } };
+        document.addEventListener("click", onAway, true);
+    }, 0);
+}
+
+async function toggleReaction(uuid, emoji) {
+    if (!uuid) return;
+    try { await window.go.main.App.ToggleReaction(uuid, emoji); }
+    catch (e) { toast("reaction: " + e); }
+}
+
+async function editMessageFlow(m) {
+    const next = prompt("Edit message:", m.text || "");
+    if (next === null || next.trim() === "" || next === m.text) return;
+    try { await window.go.main.App.EditMessage(m.uuid, next); }
+    catch (e) { toast("edit: " + e); }
+}
+
+async function deleteMessageFlow(m) {
+    if (!confirm("Delete this message? Other people will see [deleted].")) return;
+    try { await window.go.main.App.DeleteMessage(m.uuid); }
+    catch (e) { toast("delete: " + e); }
+}
+
+function startReply(m) {
+    state.replyingTo = { uuid: m.uuid, text: m.text, peer: m.peer };
+    const banner = $("reply-banner");
+    banner.classList.add("active");
+    $("reply-banner-text").textContent = (m.direction === "out" ? "your message: " : (m.peer + ": ")) + (m.text || "").slice(0, 80);
+    $("composerInput").focus();
+}
+
+function cancelReply() {
+    state.replyingTo = null;
+    $("reply-banner").classList.remove("active");
+}
+
+function jumpToMessage(uuid) {
+    const el = document.querySelector(`[data-msg="${CSS.escape(uuid)}"]`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("highlight");
+    setTimeout(() => el.classList.remove("highlight"), 1500);
 }
 
 function renderFlipCard(f, container) {
@@ -607,6 +737,59 @@ function updateFlipProgress(id, peer, bytes, size) {
     if (isPeerSelected(peer)) renderFlipCard(f, $("messages"));
 }
 
+function findMessageEverywhere(uuid, boothId) {
+    if (boothId) {
+        const list = state.msgsByBooth.get(boothId);
+        if (list) {
+            const m = list.find(x => x.uuid === uuid);
+            if (m) return { list, msg: m };
+        }
+    } else {
+        for (const [pname, list] of state.msgsByPeer) {
+            const m = list.find(x => x.uuid === uuid);
+            if (m) return { list, msg: m, peer: pname };
+        }
+    }
+    return null;
+}
+
+function applyReaction(r) {
+    const found = findMessageEverywhere(r.uuid, r.boothId);
+    if (!found) return;
+    const m = found.msg;
+    if (!m.reactions) m.reactions = {};
+    if (!m.reactions[r.emoji]) m.reactions[r.emoji] = [];
+    const idx = m.reactions[r.emoji].indexOf(r.peer);
+    if (r.action === "remove") {
+        if (idx >= 0) m.reactions[r.emoji].splice(idx, 1);
+        if (m.reactions[r.emoji].length === 0) delete m.reactions[r.emoji];
+    } else {
+        if (idx < 0) m.reactions[r.emoji].push(r.peer);
+    }
+    if ((r.boothId && isBoothSelected(r.boothId)) || (!r.boothId && (isPeerSelected(found.peer || m.peer)))) {
+        renderMessage(m, $("messages"));
+    }
+}
+
+function applyMessageEdit(e) {
+    const found = findMessageEverywhere(e.uuid, e.boothId);
+    if (!found) return;
+    found.msg.text = e.text;
+    found.msg.editedAt = e.editedAt;
+    if ((e.boothId && isBoothSelected(e.boothId)) || (!e.boothId && isPeerSelected(found.peer || found.msg.peer))) {
+        renderMessage(found.msg, $("messages"));
+    }
+}
+
+function applyMessageDelete(d) {
+    const found = findMessageEverywhere(d.uuid, d.boothId);
+    if (!found) return;
+    found.msg.deletedAt = d.deletedAt;
+    if ((d.boothId && isBoothSelected(d.boothId)) || (!d.boothId && isPeerSelected(found.peer || found.msg.peer))) {
+        renderMessage(found.msg, $("messages"));
+    }
+}
+
 function upsertBooth(b) {
     const existing = state.booths.findIndex(x => x.id === b.id);
     if (existing >= 0) state.booths[existing] = b;
@@ -842,17 +1025,28 @@ function bindComposer() {
         ev.preventDefault();
         const text = $("composerInput").value;
         if (!text.trim() || !state.selection) return;
+        const replyTo = state.replyingTo ? state.replyingTo.uuid : "";
         try {
             if (state.selection.kind === "booth") {
+                // Booth replies not yet supported on the Go side as a distinct
+                // method; the BoothMessage carries no parentUUID. For now, just
+                // dispatch as a normal booth message and clear the reply state.
                 await window.go.main.App.SendBoothMessage(state.selection.key, text);
             } else {
-                await window.go.main.App.SendMessage(state.selection.key, text);
+                if (replyTo) {
+                    await window.go.main.App.SendReply(state.selection.key, text, replyTo);
+                } else {
+                    await window.go.main.App.SendMessage(state.selection.key, text);
+                }
             }
             $("composerInput").value = "";
+            cancelReply();
         } catch (e) {
             toast("send: " + e);
         }
     });
+
+    $("reply-cancel").addEventListener("click", cancelReply);
 
     $("attachBtn").addEventListener("click", async () => {
         if (!state.selection) return;
@@ -990,6 +1184,10 @@ function bindEvents() {
             if (!focused) maybeChime();
         }
     });
+
+    window.runtime.EventsOn("reaction", (r) => applyReaction(r));
+    window.runtime.EventsOn("message-edited", (e) => applyMessageEdit(e));
+    window.runtime.EventsOn("message-deleted", (d) => applyMessageDelete(d));
 
     window.runtime.EventsOn("flip", (f) => upsertFlip(f));
 
