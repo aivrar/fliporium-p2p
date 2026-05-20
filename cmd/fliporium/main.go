@@ -23,12 +23,24 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// defaultDataDir returns <directory-containing-the-exe>/fliporium-data.
+// This keeps the install portable: copy the .exe + fliporium-data folder to a
+// USB stick, run from any working directory, and identity + history travel
+// with the binary instead of getting orphaned in whatever CWD the shell was
+// in at launch.
+func defaultDataDir() string {
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "fliporium-data")
+	}
+	return "fliporium-data"
+}
+
 func main() {
 	// Windows GUI apps lose stdout/stderr by default. Route logs to a file
 	// next to the data dir so init/runtime errors are recoverable.
 	dir := os.Getenv("FLIPORIUM_DIR")
 	if dir == "" {
-		dir = "./fliporium-data"
+		dir = defaultDataDir()
 	}
 	_ = os.MkdirAll(dir, 0o700)
 	if f, err := os.OpenFile(filepath.Join(dir, "fliporium.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {

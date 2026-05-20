@@ -7,7 +7,9 @@
 //	FLIPORIUM_AUTHKEY   — Headscale pre-auth key (required on first run only;
 //	                      identity persists in the data dir afterwards).
 //	FLIPORIUM_HOSTNAME  — node hostname (default "fliporium-cli").
-//	FLIPORIUM_DIR       — data dir for persisted identity (default "./fliporium-data").
+//	FLIPORIUM_DIR       — data dir for persisted identity (default: next to
+//	                      the exe, NOT the working directory — that's what
+//	                      makes the install USB-portable).
 //	FLIPORIUM_AUTOPEER  — comma-separated MagicDNS names to auto-connect on startup.
 //	FLIPORIUM_AUTOSAY   — optional text; sent to each auto-peered connection
 //	                      after the HELLO completes. Handy for scripted tests.
@@ -65,12 +67,21 @@ func env(key, fallback string) string {
 	return fallback
 }
 
+// defaultDataDir returns <directory-containing-the-exe>/fliporium-data so the
+// install stays portable (USB-stick friendly: data travels with the binary).
+func defaultDataDir() string {
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "fliporium-data")
+	}
+	return "fliporium-data"
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags)
 	log.SetOutput(os.Stderr)
 
 	hostname := env("FLIPORIUM_HOSTNAME", "fliporium-cli")
-	dir := env("FLIPORIUM_DIR", "./fliporium-data")
+	dir := env("FLIPORIUM_DIR", defaultDataDir())
 	authKey := os.Getenv("FLIPORIUM_AUTHKEY")
 	autoPeer := os.Getenv("FLIPORIUM_AUTOPEER")
 

@@ -215,7 +215,7 @@ func env(key, fallback string) string {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.hostname = env("FLIPORIUM_HOSTNAME", "fliporium-gui")
-	a.dataDir = env("FLIPORIUM_DIR", "./fliporium-data")
+	a.dataDir = env("FLIPORIUM_DIR", defaultDataDir())
 	log.Printf("startup: ctx=%v hostname=%s dir=%s", ctx != nil, a.hostname, a.dataDir)
 
 	go a.initBackground()
