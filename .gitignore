@@ -10,9 +10,13 @@
 
 # Build output
 *.exe
+*.exe~
 *.dll
 fliporium-test
 fliporium
+
+# Test assets
+test-image.png
 
 # Per-node tailscale identity / data folder (each install is its own)
 fliporium-data/
