@@ -3,19 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Docs — Fliporium</title>
-<meta name="description" content="Everything you need to know about using Fliporium — how to install, invite friends, use Booths, flip files, watch together, and keep your stuff private.">
+<title>Fliporium Docs — Setup, Invites, Booths, File Flips & Watch Parties</title>
+<meta name="description" content="The complete Fliporium guide: install the Windows app, invite friends by QR or link, create Booths for group chat, flip files peer-to-peer, run synced watch parties, pair devices with twin mode, and search your history. Plus troubleshooting and FAQ.">
+<meta name="keywords" content="Fliporium guide, how to invite friends, group chat booths, send files peer to peer, watch party setup, twin mode device sync, self-hosted Headscale tailnet">
 <meta name="theme-color" content="#131318">
 <link rel="canonical" href="https://fliporium.com/docs">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Fliporium">
-<meta property="og:title" content="Fliporium Docs — install, invite, booths, file flips, watch parties">
-<meta property="og:description" content="Everything you need to know about using Fliporium: install, invite friends, Booths, flipping files, Showtime, twin mode, and the privacy model.">
+<meta property="og:title" content="Fliporium Docs — Setup, Invites, Booths, File Flips & Watch Parties">
+<meta property="og:description" content="The complete guide: install, invite friends, Booths for group chat, peer-to-peer file flips, synced watch parties, twin mode, search, troubleshooting, and FAQ.">
 <meta property="og:image" content="https://fliporium.com/og.png">
 <meta property="og:url" content="https://fliporium.com/docs">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Fliporium Docs">
-<meta name="twitter:description" content="Install, invite friends, Booths, file flips, watch parties, and the privacy model.">
+<meta name="twitter:title" content="Fliporium Docs — Setup, Invites, Booths, File Flips & Watch Parties">
+<meta name="twitter:description" content="Install, invite friends, Booths, peer-to-peer file flips, synced watch parties, twin mode, troubleshooting, and FAQ.">
 <meta name="twitter:image" content="https://fliporium.com/og.png">
 <link rel="icon" href="/favicon.ico">
 <link rel="stylesheet" href="/style.css">
@@ -371,6 +372,63 @@
         </p>
     </div>
 </footer>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Is Fliporium open source?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "The source lives in a private repository today. If there's interest, we'll open it."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does Fliporium work on macOS or Linux?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Not yet. Windows is the v1 platform. The underlying networking is cross-platform, so other targets are technically possible."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does Fliporium work on phones?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Not yet. A mobile companion is a longer-term thought."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What happens if the Headscale control server goes offline?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Existing peers stay connected to each other because they've already exchanged keys. New peers won't be able to join until it's back, and routine introductions pause. The control server's job is matchmaking, not carrying your traffic."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can two Fliporium users on the same Wi-Fi chat without the internet?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Only if they've already paired through the control server at some point. After that initial handshake, two peers on the same LAN talk directly over the LAN, with no internet hop required."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I run my own Headscale server and my own Fliporium tailnet?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Fliporium is designed around a small, self-hostable control server. If you want to run your own friends-and-family deployment, get in touch."
+      }
+    }
+  ]
+}
+</script>
 
 </body>
 </html>
