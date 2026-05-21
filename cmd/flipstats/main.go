@@ -14,8 +14,13 @@
 //	-headscale       Path to the headscale binary (default /usr/local/bin/headscale)
 //	-headscale-cfg   Path to the headscale config (default /etc/headscale/config.yaml)
 //
-// Behind the scenes Caddy reverse-proxies /api/stats and /dl/ to this. Static
-// HTML/CSS is served by Caddy directly from /var/www/fliporium.
+// Behind the scenes Caddy reverse-proxies /api/stats, /api/contact, and /dl/
+// to this. Static HTML/CSS is served by Caddy directly from /var/www/fliporium.
+//
+// Contact form: POST /api/contact stores each message as a JSON line in
+// <data>/contact.jsonl and, if SMTP is configured via the environment
+// (FLIPSTATS_SMTP_HOST/PORT/USER/PASS + FLIPSTATS_CONTACT_TO), relays it to
+// the configured inbox with Reply-To set to the visitor.
 package main
 
 import (
@@ -26,6 +31,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/smtp"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,6 +51,22 @@ var (
 	headscaleCfg = flag.String("headscale-cfg", "/etc/headscale/config.yaml", "Path to headscale config")
 	trustedProxy = flag.String("trusted-proxy", "127.0.0.1", "IP allowed to set X-Forwarded-For; usually Caddy on localhost")
 )
+
+// SMTP relay config, read from the environment (set via the systemd
+// EnvironmentFile so the app password never appears in `ps` or the unit).
+// If smtpHost/smtpUser/smtpPass/contactTo are not all set, contact-form
+// emails are skipped and submissions are only stored to the JSONL inbox.
+var (
+	smtpHost  = os.Getenv("FLIPSTATS_SMTP_HOST") // e.g. smtp.gmail.com
+	smtpPort  = os.Getenv("FLIPSTATS_SMTP_PORT") // e.g. 587
+	smtpUser  = os.Getenv("FLIPSTATS_SMTP_USER") // e.g. christerfredrickson@gmail.com
+	smtpPass  = os.Getenv("FLIPSTATS_SMTP_PASS") // gmail app password
+	contactTo = os.Getenv("FLIPSTATS_CONTACT_TO")
+)
+
+func smtpConfigured() bool {
+	return smtpHost != "" && smtpPort != "" && smtpUser != "" && smtpPass != "" && contactTo != ""
+}
 
 const (
 	counterFile  = "downloads.count"
@@ -380,8 +402,65 @@ func contactHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("contact: from %s <%s> subject=%q ip=%s len=%d", sub.Name, sub.Email, sub.Subject, ip, len(sub.Message))
 
+	// Best-effort email relay. The message is already safely on disk, so a
+	// mail failure doesn't fail the request -- we just log it. The user can
+	// still recover the message from contact.jsonl.
+	if smtpConfigured() {
+		if err := sendContactEmail(rec); err != nil {
+			log.Printf("contact: email relay failed (message still saved to disk): %v", err)
+		} else {
+			log.Printf("contact: emailed to %s", contactTo)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, `{"ok":true}`)
+}
+
+// sanitizeHeader strips CR/LF from a value so it can't be used to inject
+// extra email headers (header-injection defense for the Reply-To / Subject).
+func sanitizeHeader(s string) string {
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.TrimSpace(s)
+}
+
+// sendContactEmail relays a contact submission to the configured inbox via
+// the SMTP server (Gmail). From is the authenticated account; Reply-To is the
+// visitor so a plain "Reply" in the inbox goes straight back to them.
+func sendContactEmail(rec storedContact) error {
+	subject := sanitizeHeader(rec.Subject)
+	if subject == "" {
+		subject = "(no subject)"
+	}
+	replyTo := sanitizeHeader(rec.Name) + " <" + sanitizeHeader(rec.Email) + ">"
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "From: Fliporium Contact <%s>\r\n", smtpUser)
+	fmt.Fprintf(&b, "To: %s\r\n", contactTo)
+	fmt.Fprintf(&b, "Reply-To: %s\r\n", replyTo)
+	fmt.Fprintf(&b, "Subject: [Fliporium] %s\r\n", subject)
+	fmt.Fprintf(&b, "Date: %s\r\n", rec.Time.Format(time.RFC1123Z))
+	fmt.Fprintf(&b, "Message-ID: <contact-%d@fliporium.com>\r\n", rec.Time.UnixNano())
+	b.WriteString("MIME-Version: 1.0\r\n")
+	b.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
+	b.WriteString("\r\n")
+	fmt.Fprintf(&b, "New contact form submission from fliporium.com\r\n\r\n")
+	fmt.Fprintf(&b, "Name:    %s\r\n", rec.Name)
+	fmt.Fprintf(&b, "Email:   %s\r\n", rec.Email)
+	fmt.Fprintf(&b, "Subject: %s\r\n", rec.Subject)
+	fmt.Fprintf(&b, "Time:    %s\r\n", rec.Time.Format(time.RFC1123Z))
+	fmt.Fprintf(&b, "IP:      %s\r\n", rec.IP)
+	b.WriteString("\r\n----------------------------------------\r\n\r\n")
+	// Normalize message line endings to CRLF for SMTP.
+	msg := strings.ReplaceAll(rec.Message, "\r\n", "\n")
+	msg = strings.ReplaceAll(msg, "\n", "\r\n")
+	b.WriteString(msg)
+	b.WriteString("\r\n")
+
+	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
+	addr := net.JoinHostPort(smtpHost, smtpPort)
+	return smtp.SendMail(addr, auth, smtpUser, []string{contactTo}, []byte(b.String()))
 }
 
 // appendContact writes one JSON line to <data>/contact.jsonl. Atomic per

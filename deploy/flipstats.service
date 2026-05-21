@@ -10,6 +10,11 @@ Type=simple
 # /var/lib/headscale. Headscale itself runs as root on this box so this is
 # consistent with the rest of the stack.
 User=root
+# SMTP relay credentials (Gmail app password etc.) live in this root-only
+# file, kept out of the unit so they don't show in `systemctl cat`. The
+# leading "-" makes it optional: flipstats runs fine without it, just
+# skipping the contact-email relay.
+EnvironmentFile=-/etc/flipstats/smtp.env
 ExecStart=/usr/local/bin/flipstats \
   -listen 127.0.0.1:8088 \
   -data /var/lib/flipstats \
