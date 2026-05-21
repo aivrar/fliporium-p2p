@@ -192,15 +192,27 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 	cw := &countingWriter{ResponseWriter: w}
 	http.ServeContent(cw, r, "fliporium.exe", st.ModTime(), f)
 
+	// Decide whether this counts, and log every attempt with the reason so
+	// the download tally is fully auditable after the fact.
+	ip := clientIP(r)
+	ua := r.UserAgent()
 	isRange := r.Header.Get("Range") != ""
-	completed := r.Method == http.MethodGet && !isRange &&
-		cw.status == http.StatusOK && cw.written >= st.Size()
-	if completed && !looksLikeBot(r.UserAgent()) {
+	switch {
+	case r.Method != http.MethodGet:
+		log.Printf("flipstats: dl skip (method=%s) ip=%s ua=%q", r.Method, ip, ua)
+	case isRange:
+		log.Printf("flipstats: dl skip (range request) ip=%s bytes=%d ua=%q", ip, cw.written, ua)
+	case cw.status != http.StatusOK || cw.written < st.Size():
+		log.Printf("flipstats: dl skip (incomplete: %d/%d bytes, status=%d) ip=%s ua=%q",
+			cw.written, st.Size(), cw.status, ip, ua)
+	case looksLikeBot(ua):
+		log.Printf("flipstats: dl skip (bot ua) ip=%s ua=%q", ip, ua)
+	default:
 		n := downloads.Add(1)
 		if err := saveCounter(n); err != nil {
 			log.Printf("flipstats: save counter (%d): %v", n, err)
 		}
-		log.Printf("flipstats: counted download #%d (%d bytes, ua=%q)", n, cw.written, r.UserAgent())
+		log.Printf("flipstats: COUNTED download #%d (%d bytes) ip=%s ua=%q", n, cw.written, ip, ua)
 	}
 }
 
