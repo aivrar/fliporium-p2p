@@ -31,6 +31,8 @@ fliporium.com, www.fliporium.com {
 	rewrite @stats /stats.html
 	@join path /join /join/
 	rewrite @join /join.html
+	@contact path /contact /contact/
+	rewrite @contact /contact.html
 
 	# Stats API and download both go to the flipstats sidecar.
 	# `handle` (not handle_path) preserves the full request path -- flipstats
