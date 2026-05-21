@@ -24,10 +24,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,6 +43,7 @@ var (
 	exePath      = flag.String("exe", "/var/www/fliporium/dl/fliporium.exe", "Path to the .exe to serve")
 	headscaleBin = flag.String("headscale", "/usr/local/bin/headscale", "Path to headscale binary")
 	headscaleCfg = flag.String("headscale-cfg", "/etc/headscale/config.yaml", "Path to headscale config")
+	trustedProxy = flag.String("trusted-proxy", "127.0.0.1", "IP allowed to set X-Forwarded-For; usually Caddy on localhost")
 )
 
 const (
@@ -93,6 +96,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/stats", statsHandler)
+	mux.HandleFunc("/api/contact", contactHandler)
 	mux.HandleFunc("/dl/fliporium.exe", downloadHandler)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -233,6 +237,169 @@ func pollLoop() {
 			log.Printf("flipstats: headscale poll: %v", err)
 		}
 	}
+}
+
+// ---------- /api/contact ----------
+
+// contactSubmission is what the form POSTs as JSON.
+type contactSubmission struct {
+	Name    string `json:"name"`
+	Email   string `json:"email"`
+	Subject string `json:"subject"`
+	Message string `json:"message"`
+	Phone   string `json:"phone"` // honeypot -- must be empty
+}
+
+// storedContact is what we persist on disk. One JSON object per line in
+// contact.jsonl so the user can `tail` or `jq` the file directly.
+type storedContact struct {
+	Time    time.Time `json:"time"`
+	IP      string    `json:"ip"`
+	Name    string    `json:"name"`
+	Email   string    `json:"email"`
+	Subject string    `json:"subject"`
+	Message string    `json:"message"`
+}
+
+var emailRE = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
+
+// contactRate tracks per-IP submissions for rate limiting.
+var (
+	contactRateMu sync.Mutex
+	contactRate   = map[string][]time.Time{}
+)
+
+const (
+	contactRateWindow = 1 * time.Hour
+	contactRateLimit  = 3
+)
+
+// allowContact returns true if the given IP hasn't exceeded the contact form
+// rate limit in the trailing window. It also prunes old entries.
+func allowContact(ip string) bool {
+	contactRateMu.Lock()
+	defer contactRateMu.Unlock()
+	now := time.Now()
+	cutoff := now.Add(-contactRateWindow)
+	hits := contactRate[ip]
+	pruned := hits[:0]
+	for _, t := range hits {
+		if t.After(cutoff) {
+			pruned = append(pruned, t)
+		}
+	}
+	if len(pruned) >= contactRateLimit {
+		contactRate[ip] = pruned
+		return false
+	}
+	contactRate[ip] = append(pruned, now)
+	return true
+}
+
+// clientIP returns the requester's IP. Behind Caddy we get the original IP
+// via X-Forwarded-For (Caddy sets this), but we only trust that header when
+// the immediate peer is the configured trusted proxy.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if host == *trustedProxy {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			// XFF can be a comma-separated chain. The leftmost is the original.
+			if i := strings.IndexByte(xff, ','); i > 0 {
+				return strings.TrimSpace(xff[:i])
+			}
+			return strings.TrimSpace(xff)
+		}
+	}
+	return host
+}
+
+func contactHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Hard cap on body size: 16 KB is plenty for name + email + subject + 5KB message.
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	var sub contactSubmission
+	if err := json.NewDecoder(r.Body).Decode(&sub); err != nil {
+		http.Error(w, "could not parse JSON body", http.StatusBadRequest)
+		return
+	}
+
+	// Honeypot: dumb bots fill every field. Silently 200 so they don't retry.
+	if strings.TrimSpace(sub.Phone) != "" {
+		log.Printf("contact: honeypot tripped from %s (silently accepted)", clientIP(r))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+		return
+	}
+
+	sub.Name = strings.TrimSpace(sub.Name)
+	sub.Email = strings.TrimSpace(sub.Email)
+	sub.Subject = strings.TrimSpace(sub.Subject)
+	sub.Message = strings.TrimSpace(sub.Message)
+
+	if l := len(sub.Name); l == 0 || l > 100 {
+		http.Error(w, "name must be 1-100 characters", http.StatusBadRequest)
+		return
+	}
+	if l := len(sub.Email); l == 0 || l > 120 || !emailRE.MatchString(sub.Email) {
+		http.Error(w, "valid email is required", http.StatusBadRequest)
+		return
+	}
+	if l := len(sub.Subject); l > 200 {
+		http.Error(w, "subject must be at most 200 characters", http.StatusBadRequest)
+		return
+	}
+	if l := len(sub.Message); l < 10 || l > 5000 {
+		http.Error(w, "message must be 10-5000 characters", http.StatusBadRequest)
+		return
+	}
+
+	ip := clientIP(r)
+	if !allowContact(ip) {
+		http.Error(w, "rate limit exceeded -- try again later", http.StatusTooManyRequests)
+		return
+	}
+
+	rec := storedContact{
+		Time:    time.Now().UTC(),
+		IP:      ip,
+		Name:    sub.Name,
+		Email:   sub.Email,
+		Subject: sub.Subject,
+		Message: sub.Message,
+	}
+	if err := appendContact(rec); err != nil {
+		log.Printf("contact: persist failed: %v", err)
+		http.Error(w, "could not save message", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("contact: from %s <%s> subject=%q ip=%s len=%d", sub.Name, sub.Email, sub.Subject, ip, len(sub.Message))
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, `{"ok":true}`)
+}
+
+// appendContact writes one JSON line to <data>/contact.jsonl. Atomic per
+// line because we open with O_APPEND and a single Write of the encoded bytes.
+func appendContact(rec storedContact) error {
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	path := filepath.Join(*dataDir, "contact.jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(b)
+	return err
 }
 
 func refreshNodes() error {

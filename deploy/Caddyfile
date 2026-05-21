@@ -19,7 +19,7 @@ fliporium.com, www.fliporium.com {
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		Permissions-Policy "interest-cohort=()"
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none';"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none';"
 	}
 
 	# Pretty URLs: /docs -> /docs.html, plus /privacy, /stats, /join.
@@ -38,6 +38,9 @@ fliporium.com, www.fliporium.com {
 	# `handle` (not handle_path) preserves the full request path -- flipstats
 	# expects /api/stats and /dl/fliporium.exe exactly as routed.
 	handle /api/stats {
+		reverse_proxy 127.0.0.1:8088
+	}
+	handle /api/contact {
 		reverse_proxy 127.0.0.1:8088
 	}
 	handle /dl/* {
