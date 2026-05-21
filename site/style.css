@@ -161,10 +161,18 @@ code {
     font-size: clamp(20px, 2.4vw, 26px);
     font-style: italic;
     color: var(--ink-soft);
-    margin: 0 auto 40px;
+    margin: 0 auto 18px;
     max-width: 560px;
     line-height: 1.4;
 }
+.hero-sub {
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--ink-muted);
+    max-width: 580px;
+    margin: 0 auto 36px;
+}
+.hero-sub strong { color: var(--ink-soft); font-weight: 600; }
 .hero-cta {
     display: flex;
     flex-wrap: wrap;
