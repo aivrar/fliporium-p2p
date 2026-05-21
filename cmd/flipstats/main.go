@@ -180,20 +180,63 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Count HEAD requests separately from GETs: HEAD is what redirect-checkers
-	// and link-preview bots do, and we only want to count actual file pulls.
-	if r.Method == http.MethodGet {
+	w.Header().Set("Content-Type", "application/vnd.microsoft.portable-executable")
+	w.Header().Set("Content-Disposition", `attachment; filename="fliporium.exe"`)
+	w.Header().Set("Cache-Control", "no-cache")
+
+	// Wrap the writer so we can see how many bytes actually reached the
+	// client. We only count a download once the *whole* file was delivered
+	// to a non-range GET. Scanners and link-preview bots overwhelmingly
+	// connect, confirm the file exists, then abort partway -- this filters
+	// them out so the public counter reflects real installs, not crawls.
+	cw := &countingWriter{ResponseWriter: w}
+	http.ServeContent(cw, r, "fliporium.exe", st.ModTime(), f)
+
+	isRange := r.Header.Get("Range") != ""
+	completed := r.Method == http.MethodGet && !isRange &&
+		cw.status == http.StatusOK && cw.written >= st.Size()
+	if completed && !looksLikeBot(r.UserAgent()) {
 		n := downloads.Add(1)
 		if err := saveCounter(n); err != nil {
 			log.Printf("flipstats: save counter (%d): %v", n, err)
 		}
+		log.Printf("flipstats: counted download #%d (%d bytes, ua=%q)", n, cw.written, r.UserAgent())
 	}
+}
 
-	w.Header().Set("Content-Type", "application/vnd.microsoft.portable-executable")
-	w.Header().Set("Content-Disposition", `attachment; filename="fliporium.exe"`)
-	w.Header().Set("Content-Length", strconv.FormatInt(st.Size(), 10))
-	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeContent(w, r, "fliporium.exe", st.ModTime(), f)
+// countingWriter wraps an http.ResponseWriter to record the status code and
+// the number of body bytes written, so the download handler can tell a
+// complete transfer from an aborted one.
+type countingWriter struct {
+	http.ResponseWriter
+	status  int
+	written int64
+}
+
+func (c *countingWriter) WriteHeader(code int) {
+	c.status = code
+	c.ResponseWriter.WriteHeader(code)
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	n, err := c.ResponseWriter.Write(p)
+	c.written += int64(n)
+	return n, err
+}
+
+// botUA matches user-agent substrings common to crawlers, scanners, and
+// link-preview fetchers. Case-insensitive. This is a best-effort secondary
+// filter; the primary signal is whether the full file was delivered.
+var botUA = regexp.MustCompile(`(?i)bot|crawl|spider|slurp|scan|headless|preview|fetch|curl|wget|python-requests|go-http|httpclient|facebookexternalhit|whatsapp|telegrambot|discordbot|slackbot|bingpreview`)
+
+func looksLikeBot(ua string) bool {
+	if ua == "" {
+		return true // no UA at all is overwhelmingly automated
+	}
+	return botUA.MatchString(ua)
 }
 
 // ---------- counter persistence ----------

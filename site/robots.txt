@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /join
+Disallow: /api/
+
+Sitemap: https://fliporium.com/sitemap.xml
