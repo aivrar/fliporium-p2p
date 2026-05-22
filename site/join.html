@@ -123,8 +123,8 @@
 <main>
 
 <div class="page-title">
-    <h1>You're invited</h1>
-    <p>Three quick steps and you're on your friend's Fliporium tailnet.</p>
+    <h1 id="join-title">You're invited</h1>
+    <p id="join-sub">Three quick steps and you're in the room.</p>
 </div>
 
 <div class="join-wrap">
@@ -132,25 +132,25 @@
     <div class="join-card">
         <div class="join-step-num">1</div>
         <h2>Download Fliporium</h2>
-        <p>One file. No installer. Windows 10 or 11.</p>
+        <p>One file. No installer, no account. Windows 10 or 11.</p>
         <a class="dl-btn" href="/dl/fliporium.exe">
             Download fliporium.exe
-            <small>~ 34 MB · portable .exe</small>
+            <small>~ 20 MB · portable .exe</small>
         </a>
     </div>
 
     <div class="join-card">
         <div class="join-step-num">2</div>
         <h2>Run it</h2>
-        <p>Double-click the file you just downloaded. The first time, you'll see a small &ldquo;Welcome to Fliporium&rdquo; window asking for an invite key.</p>
+        <p>Double-click the file you just downloaded. Fliporium opens to The Floor.</p>
     </div>
 
     <div class="join-card">
         <div class="join-step-num">3</div>
-        <h2>Paste your invite key</h2>
-        <p>This is your one-time key. Tap <strong>Copy</strong>, then paste it into the welcome window.</p>
+        <h2>Paste this invite link</h2>
+        <p>Copy the link below, then paste it into the <strong>&ldquo;paste an invite link to join&hellip;&rdquo;</strong> box on The Floor and hit <strong>join</strong>.</p>
         <div class="key-row">
-            <input id="invite-key" type="text" readonly placeholder="(no key in this link)">
+            <input id="invite-key" type="text" readonly placeholder="(no invite link found)">
             <button id="copy-btn" class="copy-btn">Copy</button>
         </div>
         <p class="tip" id="key-note"></p>
@@ -173,39 +173,45 @@
             <a href="/stats">Stats</a>
         </nav>
         <p class="foot-line">
-            Your invite key only exists in your browser's URL — this page never sends it to our server.
+            The room's key lives only in this link's <code>#</code> fragment — your browser never sends it to our server.
         </p>
     </div>
 </footer>
 
 <script>
-// Read the pre-auth key from the URL fragment (#k=hskey-auth-...).
-// Fragments are client-only -- the server never sees them, so the access
-// log won't capture the key even when someone shares the link.
+// The invite link is THIS page's URL. The room id, name, and the
+// end-to-end key live in the fragment (after #), which the browser never
+// sends to the server — so this page (and our logs) never see the key.
 (function () {
     const input = document.getElementById("invite-key");
     const btn = document.getElementById("copy-btn");
     const note = document.getElementById("key-note");
 
     const params = new URLSearchParams(window.location.hash.slice(1));
-    const key = params.get("k");
+    const roomId = params.get("r");
+    const roomName = params.get("n");
+    const fullLink = window.location.href;
 
-    if (!key) {
+    if (roomName) {
+        document.getElementById("join-title").textContent = "You're invited to " + roomName;
+    }
+
+    if (!roomId) {
         input.value = "";
-        input.placeholder = "(no key in this link)";
+        input.placeholder = "(no invite link found)";
         btn.disabled = true;
         btn.style.opacity = "0.45";
         btn.style.cursor = "not-allowed";
-        note.textContent = "This link doesn't include an invite key. Ask the friend who sent it to regenerate it from their Backstage → Invite a friend.";
+        note.textContent = "This link is missing its room details. Ask whoever invited you to send the full link from their room's “copy invite link” button.";
         return;
     }
 
-    input.value = key;
-    note.textContent = "Keep this link private — anyone who has it can join the tailnet.";
+    input.value = fullLink;
+    note.textContent = "Keep this link private — anyone who has it can enter the room and read its messages.";
 
     btn.addEventListener("click", async () => {
         try {
-            await navigator.clipboard.writeText(key);
+            await navigator.clipboard.writeText(fullLink);
             const old = btn.textContent;
             btn.textContent = "Copied";
             btn.classList.add("copied");
