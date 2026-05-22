@@ -3,6 +3,7 @@ package rtc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -10,6 +11,15 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+)
+
+const (
+	// maxRoomSize caps a room's mesh. Rooms are friends-sized; a full WebRTC
+	// mesh past this gets expensive (N^2 connections), and it bounds abuse.
+	maxRoomSize = 16
+	// maxTotalConns bounds total concurrent signaling connections so a flood
+	// can't exhaust the process.
+	maxTotalConns = 5000
 )
 
 // Server is the signaling/matchmaking server. Clients join rooms over a
@@ -21,6 +31,7 @@ import (
 type Server struct {
 	mu    sync.Mutex
 	rooms map[string]map[string]*serverClient // roomID -> peerID -> client
+	total int                                 // concurrent connections across all rooms
 	// Verbose logs each relayed signal (handy for the proof; off by default).
 	Verbose bool
 }
@@ -43,27 +54,40 @@ func (c *serverClient) send(m Sig) {
 	_ = wsjson.Write(ctx, c.conn, m)
 }
 
-func (s *Server) join(room string, c *serverClient) []string {
+func (s *Server) join(room string, c *serverClient) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.total >= maxTotalConns {
+		return nil, fmt.Errorf("server is at capacity, try again later")
+	}
 	m := s.rooms[room]
 	if m == nil {
 		m = map[string]*serverClient{}
 		s.rooms[room] = m
+	}
+	if len(m) >= maxRoomSize {
+		if len(m) == 0 {
+			delete(s.rooms, room) // we created it above; don't leak an empty room
+		}
+		return nil, fmt.Errorf("room is full (max %d people)", maxRoomSize)
 	}
 	others := make([]string, 0, len(m))
 	for id := range m {
 		others = append(others, id)
 	}
 	m[c.id] = c
-	return others
+	s.total++
+	return others, nil
 }
 
 func (s *Server) leave(room, id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if m := s.rooms[room]; m != nil {
-		delete(m, id)
+		if _, ok := m[id]; ok {
+			delete(m, id)
+			s.total--
+		}
 		if len(m) == 0 {
 			delete(s.rooms, room)
 		}
@@ -151,7 +175,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	c := &serverClient{id: first.From, conn: conn}
 	room := first.Room
-	others := s.join(room, c)
+	others, err := s.join(room, c)
+	if err != nil {
+		_ = wsjson.Write(r.Context(), conn, Sig{Type: SigError, Msg: err.Error()})
+		return
+	}
 	s.logf("join: peer=%s room=%s (now %d members)", c.id, room, len(others)+1)
 
 	c.send(Sig{Type: SigPeers, Room: room, Peers: others})
