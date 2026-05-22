@@ -820,6 +820,7 @@ const (
 	SettingSoundsOn     = "sounds_on"    // "1" | "0"
 	SettingTourDone     = "tour_done"    // "1" once the first-launch tour finishes
 	SettingSeenPeers    = "seen_peers"   // comma-separated peer names for confetti dedup
+	SettingDisplayName  = "display_name" // user-chosen label, separate from identity
 )
 
 // GetBoothNotepad returns the shared notepad for a booth (or an empty record

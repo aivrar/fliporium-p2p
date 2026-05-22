@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"fliporium/internal/identity"
 	"fliporium/internal/peer"
 	"fliporium/internal/store"
 
@@ -40,10 +41,12 @@ const (
 
 // SelfInfo is what the UI shows about *us* in the title bar / status.
 type SelfInfo struct {
-	Hostname string   `json:"hostname"`
-	DNSName  string   `json:"dnsName"`
-	IPs      []string `json:"ips"`
-	Online   bool     `json:"online"`
+	Hostname    string   `json:"hostname"`
+	DisplayName string   `json:"displayName"`
+	ID          string   `json:"id"` // stable pubkey fingerprint
+	DNSName     string   `json:"dnsName"`
+	IPs         []string `json:"ips"`
+	Online      bool     `json:"online"`
 }
 
 // PeerInfo summarises a peer for the Floor list.
@@ -193,6 +196,7 @@ type App struct {
 
 	hostname string
 	dataDir  string
+	identity identity.Identity
 
 	// authKeyCh delivers the pre-auth key from the JS-side onboarding modal
 	// when the user has no existing tsnet state and no FLIPORIUM_AUTHKEY env
@@ -225,6 +229,12 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.hostname = env("FLIPORIUM_HOSTNAME", "fliporium-gui")
 	a.dataDir = env("FLIPORIUM_DIR", defaultDataDir())
+	if id, err := identity.Load(a.dataDir); err == nil {
+		a.identity = id
+		log.Printf("startup: identity %s", id.ID())
+	} else {
+		log.Printf("startup: identity load failed: %v", err)
+	}
 	log.Printf("startup: ctx=%v hostname=%s dir=%s", ctx != nil, a.hostname, a.dataDir)
 
 	go a.initBackground()
@@ -312,10 +322,12 @@ func (a *App) initBackground() {
 	if tsStatus.Self != nil {
 		a.mu.Lock()
 		a.self = SelfInfo{
-			Hostname: tsStatus.Self.HostName,
-			DNSName:  strings.TrimSuffix(tsStatus.Self.DNSName, "."),
-			IPs:      ipsAsStrings(tsStatus.Self.TailscaleIPs),
-			Online:   true,
+			Hostname:    tsStatus.Self.HostName,
+			DisplayName: a.displayName(),
+			ID:          a.identity.ID(),
+			DNSName:     strings.TrimSuffix(tsStatus.Self.DNSName, "."),
+			IPs:         ipsAsStrings(tsStatus.Self.TailscaleIPs),
+			Online:      true,
 		}
 		a.mu.Unlock()
 	}
@@ -357,7 +369,7 @@ func (a *App) initWebRTC(signalURL string) {
 	}
 
 	a.mu.Lock()
-	a.self = SelfInfo{Hostname: a.hostname, Online: true}
+	a.self = SelfInfo{Hostname: a.hostname, DisplayName: a.displayName(), ID: a.identity.ID(), Online: true}
 	a.mu.Unlock()
 
 	a.hub = peer.NewHub()
@@ -752,6 +764,38 @@ func (a *App) Status() AppStatus {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return AppStatus{State: a.state, Message: a.stateMsg, Self: a.self}
+}
+
+// displayName returns the user-chosen label, defaulting to the hostname.
+func (a *App) displayName() string {
+	if a.store != nil {
+		if dn, _ := a.store.GetSetting(a.ctx, store.SettingDisplayName); dn != "" {
+			return dn
+		}
+	}
+	return a.hostname
+}
+
+// SetDisplayName updates the user-chosen label (separate from the device's
+// cryptographic identity) and refreshes the UI's self view.
+func (a *App) SetDisplayName(name string) error {
+	if a.store == nil {
+		return fmt.Errorf("store not ready")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("name required")
+	}
+	if err := a.store.SetSetting(a.ctx, store.SettingDisplayName, name); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.self.DisplayName = name
+	a.mu.Unlock()
+	if a.ctx != nil {
+		wailsruntime.EventsEmit(a.ctx, "app-state", a.Status())
+	}
+	return nil
 }
 
 // ListPeers returns everyone Headscale knows about (tailnet peers), merged
