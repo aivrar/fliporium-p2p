@@ -1873,8 +1873,8 @@ func (a *App) SendBoothFlip(boothID, localPath string) (string, error) {
 	return id, nil
 }
 
-// PickAndSendFlip pops the OS file picker, then flips the chosen file.
-// Returns the new flip's id, or "" if the user cancelled.
+// PickAndSendFlip pops the OS file picker (multi-select), then flips each
+// chosen file to the peer. Returns the count sent, or "" if cancelled.
 func (a *App) PickAndSendFlip(peerName string) (string, error) {
 	if a.hub == nil {
 		return "", fmt.Errorf("hub not ready")
@@ -1882,21 +1882,18 @@ func (a *App) PickAndSendFlip(peerName string) (string, error) {
 	if peerName == "" {
 		return "", fmt.Errorf("peer required")
 	}
-	path, err := wailsruntime.OpenFileDialog(a.ctx, wailsruntime.OpenDialogOptions{
-		Title: "Pick a file to flip",
+	paths, err := wailsruntime.OpenMultipleFilesDialog(a.ctx, wailsruntime.OpenDialogOptions{
+		Title: "Pick file(s) to flip",
 	})
 	if err != nil {
 		return "", err
 	}
-	if path == "" {
-		return "", nil
-	}
-	return a.hub.SendFlip(peerName, path)
+	return a.sendMany(peerName, paths, false)
 }
 
-// PickAndSendBoothFlip pops the OS file picker, then flips the chosen file to
-// everyone in the room. The reliable way to send a file in a room (works even
-// where native drag-and-drop doesn't).
+// PickAndSendBoothFlip pops the OS file picker (multi-select), then flips each
+// chosen file to everyone in the room. The reliable way to send files in a
+// room (works even where native drag-and-drop doesn't).
 func (a *App) PickAndSendBoothFlip(boothID string) (string, error) {
 	if a.hub == nil || a.store == nil {
 		return "", fmt.Errorf("app not ready")
@@ -1904,16 +1901,43 @@ func (a *App) PickAndSendBoothFlip(boothID string) (string, error) {
 	if boothID == "" {
 		return "", fmt.Errorf("room required")
 	}
-	path, err := wailsruntime.OpenFileDialog(a.ctx, wailsruntime.OpenDialogOptions{
-		Title: "Pick a file to send to the room",
+	paths, err := wailsruntime.OpenMultipleFilesDialog(a.ctx, wailsruntime.OpenDialogOptions{
+		Title: "Pick file(s) to send to the room",
 	})
 	if err != nil {
 		return "", err
 	}
-	if path == "" {
-		return "", nil
+	return a.sendMany(boothID, paths, true)
+}
+
+// sendMany flips a batch of files, either to a single peer or fanned out to a
+// room (booth). Reports how many started; surfaces the first error if all
+// failed.
+func (a *App) sendMany(target string, paths []string, booth bool) (string, error) {
+	if len(paths) == 0 {
+		return "", nil // cancelled
 	}
-	return a.SendBoothFlip(boothID, path)
+	sent := 0
+	var firstErr error
+	for _, p := range paths {
+		var err error
+		if booth {
+			_, err = a.SendBoothFlip(target, p)
+		} else {
+			_, err = a.hub.SendFlip(target, p)
+		}
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		sent++
+	}
+	if sent == 0 && firstErr != nil {
+		return "", firstErr
+	}
+	return fmt.Sprintf("%d", sent), nil
 }
 
 // ListFlips returns the flip history with the named peer.

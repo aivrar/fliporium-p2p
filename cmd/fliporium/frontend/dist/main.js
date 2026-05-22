@@ -393,6 +393,24 @@ function jumpToMessage(uuid) {
     setTimeout(() => el.classList.remove("highlight"), 1500);
 }
 
+// peerLabel resolves a routing id to its friendly display name, falling back
+// to the id when unknown.
+function peerLabel(name) {
+    const p = state.peers && state.peers.find(x => x.name === name);
+    return (p && p.displayName) || name;
+}
+
+// flipVisibleNow reports whether a flip belongs in the currently open view —
+// either a 1:1 with its peer, or a room the peer is a member of.
+function flipVisibleNow(f) {
+    if (isPeerSelected(f.peer)) return true;
+    if (state.selection && state.selection.kind === "booth") {
+        const booth = state.booths.find(b => b.id === state.selection.key);
+        if (booth && (booth.members || []).includes(f.peer)) return true;
+    }
+    return false;
+}
+
 function renderFlipCard(f, container) {
     let card = container.querySelector(`[data-flip="${escapeAttr(f.id)}"]`);
     if (!card) {
@@ -401,7 +419,7 @@ function renderFlipCard(f, container) {
         container.appendChild(card);
     }
     card.className = "flip " + (f.direction === "out" ? "out" : "in") + " " + (f.status || "");
-    const senderLabel = f.direction === "out" ? "me" : f.peer;
+    const senderLabel = f.direction === "out" ? "me" : peerLabel(f.peer);
     const sizeStr = formatBytes(f.size || 0);
     const ts = shortTime(f.startedAt || f.at);
 
@@ -778,7 +796,7 @@ function appendMessage(m) {
 function upsertFlip(f) {
     if (!state.flipsByPeer.has(f.peer)) state.flipsByPeer.set(f.peer, new Map());
     state.flipsByPeer.get(f.peer).set(f.id, f);
-    if (isPeerSelected(f.peer)) {
+    if (flipVisibleNow(f)) {
         renderFlipCard(f, $("messages"));
         $("messages").scrollTop = $("messages").scrollHeight;
     } else if (f.direction === "in" && f.status === "complete") {
@@ -794,7 +812,7 @@ function updateFlipProgress(id, peer, bytes, size) {
     if (!f) return;
     f.bytes = bytes;
     f.size = size || f.size;
-    if (isPeerSelected(peer)) renderFlipCard(f, $("messages"));
+    if (flipVisibleNow(f)) renderFlipCard(f, $("messages"));
 }
 
 function findMessageEverywhere(uuid, boothId) {

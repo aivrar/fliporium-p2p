@@ -20,6 +20,7 @@ import (
 	"hash"
 	"io"
 	mimepkg "mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,6 +77,22 @@ func (h *Hub) SendFlipWithID(peerName, localPath, id string) error {
 	mimeType := mimepkg.TypeByExtension(filepath.Ext(base))
 	if i := strings.IndexByte(mimeType, ';'); i >= 0 {
 		mimeType = strings.TrimSpace(mimeType[:i])
+	}
+	if mimeType == "" {
+		// Unknown/missing extension (Windows' registry-backed lookup is also
+		// spotty): sniff the content so images/video/PDF still preview, then
+		// rewind so the actual transfer reads from the start.
+		head := make([]byte, 512)
+		if n, _ := f.Read(head); n > 0 {
+			mimeType = http.DetectContentType(head[:n])
+			if i := strings.IndexByte(mimeType, ';'); i >= 0 {
+				mimeType = strings.TrimSpace(mimeType[:i])
+			}
+		}
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			f.Close()
+			return fmt.Errorf("rewind %s: %w", localPath, err)
+		}
 	}
 
 	start := FlipStart{ID: id, Filename: base, Size: info.Size(), Mime: mimeType}
