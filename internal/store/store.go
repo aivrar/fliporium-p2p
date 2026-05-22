@@ -98,6 +98,9 @@ const (
 	FlipStatusComplete  = "complete"
 	FlipStatusFailed    = "failed"
 	FlipStatusCancelled = "cancelled"
+	// FlipStatusQueued is a file added to a room while no one else was present.
+	// It's stored locally (peer = room id) and sent when someone joins.
+	FlipStatusQueued = "queued"
 )
 
 // FlipRecord is a row in the flips table.

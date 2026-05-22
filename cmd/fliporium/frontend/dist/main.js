@@ -405,6 +405,7 @@ function peerLabel(name) {
 function flipVisibleNow(f) {
     if (isPeerSelected(f.peer)) return true;
     if (state.selection && state.selection.kind === "booth") {
+        if (f.peer === state.selection.key) return true; // parked-in-room flip
         const booth = state.booths.find(b => b.id === state.selection.key);
         if (booth && (booth.members || []).includes(f.peer)) return true;
     }
@@ -428,6 +429,8 @@ function renderFlipCard(f, container) {
         statusLine = f.direction === "out" ? "sending..." : "receiving...";
     } else if (f.status === "complete") {
         statusLine = f.direction === "out" ? "sent" : "caught";
+    } else if (f.status === "queued") {
+        statusLine = "waiting · sends when someone joins";
     } else if (f.status === "failed") {
         statusLine = "failed";
     } else if (f.status === "cancelled") {
@@ -473,7 +476,7 @@ async function startShowtime(boothId, flipId) {
 window.startShowtime = startShowtime;
 
 function renderFlipPreview(f) {
-    if (f.status !== "complete" || !f.catchUrl) return "";
+    if ((f.status !== "complete" && f.status !== "queued") || !f.catchUrl) return "";
     const mime = (f.mime || "").toLowerCase();
     const url = f.catchUrl;
     if (mime.startsWith("image/")) {
@@ -594,6 +597,7 @@ function renderChatBooth(boothId, list) {
     // arrive as 1:1 flips per member, so we surface flip cards by including
     // them from each peer's flip list whose peer is also a booth member.
     const memberSet = new Set(booth.members || []);
+    memberSet.add(boothId); // files parked in the room while empty are keyed by room id
     const flipCards = [];
     for (const [peerName, m] of state.flipsByPeer) {
         if (!memberSet.has(peerName)) continue;

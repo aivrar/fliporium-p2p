@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	mimepkg "mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -234,12 +235,6 @@ type App struct {
 	room          *rtc.Room
 	currentRoomID string
 
-	// pendingFlips holds files added to a room while no one else was present,
-	// keyed by room id. They're sent to the next person who joins (files
-	// transfer live and don't have a server-side backlog like messages do).
-	pendingMu    sync.Mutex
-	pendingFlips map[string][]string
-
 	statusMu   sync.Mutex
 	peerStatus map[string]string // peer name -> "active"|"idle"|"away"
 	myStatus   string
@@ -342,7 +337,6 @@ func (a *App) initWebRTC(signalURL string) {
 	a.hub = peer.NewHub()
 	a.hub.CatchRoot = filepath.Join(a.dataDir, "catch")
 	a.hub.SetSelfDisplay(a.displayName())
-	a.pendingFlips = map[string][]string{}
 	go a.eventPump()
 	a.setState(StateReady, "")
 
@@ -575,8 +569,8 @@ func (a *App) eventPump() {
 			a.roomMu.Unlock()
 			if cur != "" {
 				_ = a.store.AddBoothMember(a.ctx, cur, ev.Peer, ev.At)
-				// Deliver anything queued while the room was empty.
-				a.flushPendingFlips(cur, ev.Peer)
+				// Deliver anything parked while the room was empty.
+				a.deliverQueuedFlips(cur, ev.Peer)
 			}
 			wailsruntime.EventsEmit(a.ctx, "peer-state-changed", map[string]any{
 				"peer":      ev.Peer,
@@ -1880,33 +1874,76 @@ func (a *App) SendBoothFlip(boothID, localPath string) (string, error) {
 		if firstErr != nil {
 			return id, firstErr
 		}
-		// No one's here yet. Queue the file so it sends to the next person who
-		// joins, rather than failing outright.
-		a.pendingMu.Lock()
-		a.pendingFlips[boothID] = append(a.pendingFlips[boothID], localPath)
-		a.pendingMu.Unlock()
+		// No one's here yet. Park the file LOCALLY (keyed by room id) so it
+		// survives a restart, shows the sender a preview, and sends to the
+		// next person who joins. Nothing leaves this machine until then.
 		name := filepath.Base(localPath)
-		wailsruntime.EventsEmit(a.ctx, "notice", "Queued "+name+" — it'll send when someone joins the room.")
+		mime := mimeByPath(localPath)
+		size := fileSize(localPath)
+		now := time.Now().UTC()
+		if err := a.store.AppendFlip(a.ctx, store.FlipRecord{
+			ID: id, Peer: boothID, Direction: store.DirectionOut, Filename: name,
+			Size: size, Mime: mime, Path: localPath, Status: store.FlipStatusQueued, StartedAt: now,
+		}); err != nil {
+			return id, err
+		}
+		wailsruntime.EventsEmit(a.ctx, "flip", FlipRecord{
+			ID: id, Peer: boothID, Direction: store.DirectionOut, Filename: name,
+			Size: size, Mime: mime, Path: localPath, Status: store.FlipStatusQueued,
+			StartedAt: now.Format(time.RFC3339Nano), CatchURL: "/catch/" + id,
+		})
+		wailsruntime.EventsEmit(a.ctx, "notice", "Added "+name+" to the room — it'll send when someone joins.")
 		return id, nil
 	}
 	return id, nil
 }
 
-// flushPendingFlips sends any files queued for a room (while it was empty) to
-// a peer that just joined.
-func (a *App) flushPendingFlips(boothID, peerName string) {
-	a.pendingMu.Lock()
-	paths := a.pendingFlips[boothID]
-	delete(a.pendingFlips, boothID)
-	a.pendingMu.Unlock()
-	for _, p := range paths {
-		id, err := newBoothID()
-		if err != nil {
+// mimeByPath best-efforts a content type from extension, then sniffing.
+func mimeByPath(path string) string {
+	mt := mimepkg.TypeByExtension(filepath.Ext(path))
+	if i := strings.IndexByte(mt, ';'); i >= 0 {
+		mt = strings.TrimSpace(mt[:i])
+	}
+	if mt == "" {
+		if f, err := os.Open(path); err == nil {
+			head := make([]byte, 512)
+			if n, _ := f.Read(head); n > 0 {
+				mt = http.DetectContentType(head[:n])
+				if i := strings.IndexByte(mt, ';'); i >= 0 {
+					mt = strings.TrimSpace(mt[:i])
+				}
+			}
+			f.Close()
+		}
+	}
+	return mt
+}
+
+func fileSize(path string) int64 {
+	if fi, err := os.Stat(path); err == nil {
+		return fi.Size()
+	}
+	return 0
+}
+
+// deliverQueuedFlips sends a room's locally-parked files (added while no one
+// was present) to a peer that just joined. The transfer marks each one
+// complete, so it's delivered to the first person who shows up.
+func (a *App) deliverQueuedFlips(boothID, peerName string) {
+	rows, err := a.store.FlipsByPeer(a.ctx, boothID) // queued flips are keyed by room id
+	if err != nil {
+		return
+	}
+	for _, r := range rows {
+		if r.Status != store.FlipStatusQueued {
 			continue
 		}
-		if err := a.hub.SendFlipWithID(peerName, p, id); err != nil {
-			log.Printf("flush pending flip %q to %s: %v", p, peerName, err)
+		if err := a.hub.SendFlipWithID(peerName, r.Path, r.ID); err != nil {
+			log.Printf("deliver queued flip %q to %s: %v", r.Path, peerName, err)
+			continue
 		}
+		// It's on its way; it's no longer just-parked.
+		_ = a.store.UpdateFlipStatus(a.ctx, r.ID, store.FlipStatusComplete, "", time.Now().UTC())
 	}
 }
 
@@ -2008,7 +2045,7 @@ func flipRowToRecord(r store.FlipRecord) FlipRecord {
 	if !r.CompletedAt.IsZero() {
 		rec.CompletedAt = r.CompletedAt.UTC().Format(time.RFC3339Nano)
 	}
-	if r.Status == store.FlipStatusComplete {
+	if r.Status == store.FlipStatusComplete || r.Status == store.FlipStatusQueued {
 		rec.CatchURL = "/catch/" + r.ID
 	}
 	return rec
@@ -2027,11 +2064,16 @@ func (a *App) ListBoothFlips(boothID string) ([]FlipRecord, error) {
 	}
 	seen := map[string]bool{}
 	out := []FlipRecord{}
+	// "Sources" = each member (flips exchanged with them) + the room id itself
+	// (files parked locally while the room was empty).
+	sources := []string{boothID}
 	for _, mem := range members {
-		if mem.PeerName == a.hostname {
-			continue
+		if mem.PeerName != a.hostname {
+			sources = append(sources, mem.PeerName)
 		}
-		rows, err := a.store.FlipsByPeer(a.ctx, mem.PeerName)
+	}
+	for _, src := range sources {
+		rows, err := a.store.FlipsByPeer(a.ctx, src)
 		if err != nil {
 			continue
 		}
@@ -2080,13 +2122,14 @@ func (a *App) catchHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if f.Status != store.FlipStatusComplete {
-		http.Error(w, "flip not complete", http.StatusNotFound)
+	if f.Status != store.FlipStatusComplete && f.Status != store.FlipStatusQueued {
+		http.Error(w, "flip not ready", http.StatusNotFound)
 		return
 	}
-	// Serves both inbound (caught files) and outbound (the sender's own
-	// originals). This endpoint is only reachable from this app's own webview,
-	// never the network, so showing the local user their own file is safe.
+	// Serves inbound (caught files), outbound (the sender's own originals), and
+	// queued room files (also the sender's own originals). This endpoint is
+	// only reachable from this app's own webview, never the network, so showing
+	// the local user their own file is safe.
 	if f.Mime != "" {
 		w.Header().Set("Content-Type", f.Mime)
 	}
