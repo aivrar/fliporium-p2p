@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 
 	"github.com/pion/webrtc/v4"
@@ -28,12 +29,22 @@ func Connect(ctx context.Context, send func(Sig) error, in <-chan Sig, self, rem
 	se.DetachDataChannels() // makes dc.Detach() return an io.ReadWriteCloser
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(se))
 
-	pc, err := api.NewPeerConnection(webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{{URLs: stun}},
-	})
+	// No ICE servers when none are configured (e.g. same-machine tests use host
+	// candidates only); an ICEServer with empty URLs would error.
+	var cfg webrtc.Configuration
+	if len(stun) > 0 {
+		cfg.ICEServers = []webrtc.ICEServer{{URLs: stun}}
+	}
+	pc, err := api.NewPeerConnection(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("new peer connection: %w", err)
 	}
+
+	// Instrument connectivity so we can see direct-vs-relay behaviour and
+	// diagnose NAT-traversal failures (the top risk for a consumer install).
+	pc.OnICEConnectionStateChange(func(s webrtc.ICEConnectionState) {
+		log.Printf("rtc: ice state %s <-> %s: %s", self, remote, s)
+	})
 
 	// Trickle local ICE candidates to the remote via signaling.
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {

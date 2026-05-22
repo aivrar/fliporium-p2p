@@ -58,12 +58,15 @@ func NewTLSConfig(hostname string) (*tls.Config, error) {
 	}, nil
 }
 
-// PeerConn is one live tailnet peer connection after the HELLO handshake.
+// PeerConn is one live peer connection after the HELLO handshake. The
+// transport is any io.ReadWriteCloser: a TLS-over-tailnet net.Conn (legacy)
+// or a detached WebRTC DataChannel — runLoop/WriteFrame/Close only need
+// Read/Write/Close, so the same machinery serves both.
 type PeerConn struct {
 	Name    string // remote's announced display name
 	Addr    string // remote net address for logging
 	Version string // remote protocol version
-	conn    net.Conn
+	conn    io.ReadWriteCloser
 	mu      sync.Mutex // serializes writes
 	closeMu sync.Mutex
 	closed  bool

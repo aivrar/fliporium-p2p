@@ -266,6 +266,14 @@ func (a *App) initBackground() {
 	}
 	a.store = st
 
+	// WebRTC transport (the product direction): when a signaling server is
+	// configured, peers connect peer-to-peer through a room instead of the
+	// tailnet. Falls through to the legacy tsnet path otherwise.
+	if signalURL := os.Getenv("FLIPORIUM_SIGNAL"); signalURL != "" {
+		a.initWebRTC(signalURL)
+		return
+	}
+
 	log.Printf("init: bringing up tsnet")
 	authKey := os.Getenv("FLIPORIUM_AUTHKEY")
 	// If we don't have a key AND there's no previously-registered tsnet state
@@ -335,6 +343,36 @@ func (a *App) initBackground() {
 
 	log.Printf("init: ready (self=%+v)", a.self)
 	a.setState(StateReady, "")
+}
+
+// initWebRTC brings the app up on the WebRTC transport: identity is still the
+// hostname (pubkey identity arrives in Phase 2), peers meet in a signaling
+// room and connect peer-to-peer. The Hub, store, and event pump are shared
+// verbatim with the tsnet path — only how PeerConns are created differs.
+func (a *App) initWebRTC(signalURL string) {
+	room := env("FLIPORIUM_ROOM", "fliporium")
+	stun := []string{"stun:stun.l.google.com:19302"}
+	if s := os.Getenv("FLIPORIUM_STUN"); s != "" {
+		stun = strings.Split(s, ",")
+	}
+
+	a.mu.Lock()
+	a.self = SelfInfo{Hostname: a.hostname, Online: true}
+	a.mu.Unlock()
+
+	a.hub = peer.NewHub()
+	a.hub.CatchRoot = filepath.Join(a.dataDir, "catch")
+	go a.eventPump()
+
+	log.Printf("init: webrtc transport (signal=%s room=%s host=%s)", signalURL, room, a.hostname)
+	a.setState(StateReady, "")
+
+	go func() {
+		if err := a.hub.RunWebRTC(a.ctx, signalURL, room, a.hostname, stun); err != nil {
+			log.Printf("webrtc: transport ended: %v", err)
+			a.setState(StateError, "connection lost: "+err.Error())
+		}
+	}()
 }
 
 func (a *App) acceptLoop() {
@@ -729,25 +767,30 @@ func (a *App) ListPeers() ([]PeerInfo, error) {
 
 	byName := map[string]*PeerInfo{}
 
-	lc, err := a.srv.LocalClient()
-	if err == nil {
-		ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
-		st, err := lc.Status(ctx)
-		cancel()
+	// Tailnet peer enumeration only applies to the legacy tsnet transport. On
+	// the WebRTC transport (a.srv == nil) peers come from the live hub +
+	// store roster below.
+	if a.srv != nil {
+		lc, err := a.srv.LocalClient()
 		if err == nil {
-			for _, p := range st.Peer {
-				name := p.HostName
-				if name == "" {
-					continue
-				}
-				if name == a.hostname {
-					continue
-				}
-				byName[name] = &PeerInfo{
-					Name:          name,
-					TailnetName:   strings.TrimSuffix(p.DNSName, "."),
-					IPs:           ipsAsStrings(p.TailscaleIPs),
-					TailnetOnline: p.Online,
+			ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
+			st, err := lc.Status(ctx)
+			cancel()
+			if err == nil {
+				for _, p := range st.Peer {
+					name := p.HostName
+					if name == "" {
+						continue
+					}
+					if name == a.hostname {
+						continue
+					}
+					byName[name] = &PeerInfo{
+						Name:          name,
+						TailnetName:   strings.TrimSuffix(p.DNSName, "."),
+						IPs:           ipsAsStrings(p.TailscaleIPs),
+						TailnetOnline: p.Online,
+					}
 				}
 			}
 		}
@@ -1659,6 +1702,11 @@ func (a *App) Connect(peerName string) error {
 	}
 	if peerName == "" {
 		return fmt.Errorf("peer name required")
+	}
+	// On the WebRTC transport there's nothing to dial — the room mesh connects
+	// to every member automatically — so Connect is a no-op.
+	if a.srv == nil {
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
 	defer cancel()
