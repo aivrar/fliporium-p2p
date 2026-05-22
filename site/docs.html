@@ -3,20 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Fliporium Docs — Setup, Invites, Booths, File Flips & Watch Parties</title>
-<meta name="description" content="The complete Fliporium guide: install the Windows app, invite friends by QR or link, create Booths for group chat, flip files peer-to-peer, run synced watch parties, pair devices with twin mode, and search your history. Plus troubleshooting and FAQ.">
-<meta name="keywords" content="Fliporium guide, how to invite friends, group chat booths, send files peer to peer, watch party setup, twin mode device sync, self-hosted Headscale tailnet">
+<title>Fliporium Docs — Setup, Invites, Rooms, File Flips & Watch Parties</title>
+<meta name="description" content="The complete Fliporium guide: install the Windows app, invite friends by QR or link, create Rooms for group chat, flip files peer-to-peer, run synced watch parties, pair devices with twin mode, and search your history. Plus troubleshooting and FAQ.">
+<meta name="keywords" content="Fliporium guide, how to invite friends, invite link rooms, send files peer to peer, watch party setup, twin mode device sync, end-to-end encrypted chat">
 <meta name="theme-color" content="#131318">
 <link rel="canonical" href="https://fliporium.com/docs">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Fliporium">
-<meta property="og:title" content="Fliporium Docs — Setup, Invites, Booths, File Flips & Watch Parties">
-<meta property="og:description" content="The complete guide: install, invite friends, Booths for group chat, peer-to-peer file flips, synced watch parties, twin mode, search, troubleshooting, and FAQ.">
+<meta property="og:title" content="Fliporium Docs — Setup, Invites, Rooms, File Flips & Watch Parties">
+<meta property="og:description" content="The complete guide: install, invite friends, Rooms for group chat, peer-to-peer file flips, synced watch parties, twin mode, search, troubleshooting, and FAQ.">
 <meta property="og:image" content="https://fliporium.com/og.png">
 <meta property="og:url" content="https://fliporium.com/docs">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Fliporium Docs — Setup, Invites, Booths, File Flips & Watch Parties">
-<meta name="twitter:description" content="Install, invite friends, Booths, peer-to-peer file flips, synced watch parties, twin mode, troubleshooting, and FAQ.">
+<meta name="twitter:title" content="Fliporium Docs — Setup, Invites, Rooms, File Flips & Watch Parties">
+<meta name="twitter:description" content="Install, invite friends, Rooms, peer-to-peer file flips, synced watch parties, twin mode, troubleshooting, and FAQ.">
 <meta name="twitter:image" content="https://fliporium.com/og.png">
 <link rel="icon" href="/favicon.ico">
 <link rel="stylesheet" href="/style.css">
@@ -52,7 +52,7 @@
         <li><a href="#vocabulary">Vocabulary</a></li>
         <li><a href="#invite">Invite a friend</a></li>
         <li><a href="#chat">Chatting one-to-one</a></li>
-        <li><a href="#booths">Booths</a></li>
+        <li><a href="#rooms">Rooms</a></li>
         <li><a href="#flips">Flipping files</a></li>
         <li><a href="#showtime">Showtime (watch together)</a></li>
         <li><a href="#twin">Twin mode (same person, two devices)</a></li>
@@ -75,7 +75,7 @@
 </p>
 <ul>
     <li>A short three-card <strong>Welcome tour</strong> appears.</li>
-    <li>Behind the scenes, your device generates a private key, joins the Fliporium tailnet, and gets a name like <code>your-hostname</code>.</li>
+    <li>Behind the scenes, your device generates its own identity key. You pick a display name; you can change it any time.</li>
     <li>A folder called <code>fliporium-data</code> appears next to the <code>.exe</code>. That's your local chat history, identity, and any files you've caught. Don't delete it unless you want to start over.</li>
 </ul>
 <p>
@@ -90,17 +90,17 @@
 </p>
 <dl>
     <dt>The Floor</dt>
-    <dd>The home view. The list of people and booths visible to you, plus your composer at the bottom.</dd>
+    <dd>The home view. The list of people and rooms visible to you, plus your composer at the bottom.</dd>
     <dt>Marquee</dt>
     <dd>The top strip. Brand on the left, your own info and Backstage on the right.</dd>
-    <dt>Booth</dt>
-    <dd>A small group room. You pick who's in it. Has its own shared notepad and watch-party slot.</dd>
+    <dt>Room</dt>
+    <dd>A small private space you create and invite people to by link. Everyone with the link is in. Has its own shared notepad and watch-party slot.</dd>
     <dt>Flip</dt>
     <dd>To send a file. &ldquo;Flip me that picture&rdquo; = drag-and-drop or use the <em>flip</em> button.</dd>
     <dt>Catch</dt>
     <dd>To receive a flipped file. The file lands in your <code>fliporium-data/inbox/</code> folder; click the file in chat to open it.</dd>
     <dt>Showtime</dt>
-    <dd>A synchronized watch-party inside a booth. Whoever started it is the leader; everyone else syncs to their play/pause.</dd>
+    <dd>A synchronized watch-party inside a room. Whoever started it is the leader; everyone else syncs to their play/pause.</dd>
     <dt>Backstage</dt>
     <dd>Your settings drawer. Theme, sounds, twin pairing, invites, danger zone.</dd>
     <dt>Twin</dt>
@@ -109,51 +109,38 @@
 
 <h2 id="invite">Invite a friend</h2>
 <p>
-    Inviting someone is a one-time thing per friend. Once they're on your
-    tailnet, they show up on your Floor and stay there.
+    Inviting people means sharing a room's <strong>invite link</strong>.
+    Anyone who has the link can open the room and join everyone in it.
 </p>
 
-<h3>Step 1 — generate the invite</h3>
+<h3>Step 1 — make a room</h3>
 <ol>
-    <li>Open <strong>Backstage</strong> (top-right of the app) → <em>Invite a friend</em>.</li>
-    <li>Paste a fresh Headscale pre-auth key in the input. (You'll have this if you set up the control server yourself, or someone running the tailnet will give it to you.)</li>
-    <li>Click <strong>Generate</strong>.</li>
+    <li>On <strong>The Floor</strong>, click the <strong>+</strong> next to <em>Rooms</em>.</li>
+    <li>Give it a name. You're now in the room.</li>
 </ol>
 
-<h3>Step 2 — pick how to send it</h3>
+<h3>Step 2 — copy the invite link</h3>
 <p>
-    The Generate button gives you <strong>three equivalent ways</strong> to
-    pass the invite to your friend. Use whichever fits the situation:
+    At the top of the room, hit <strong>&ldquo;copy invite link&rdquo;</strong>.
+    The link looks like <code>https://fliporium.com/join#r=…&amp;k=…</code> and
+    you can send it however you like — chat, email, in person.
 </p>
-<dl>
-    <dt>QR code</dt>
-    <dd>Best when you're <em>in the same room</em>. Friend points a phone camera at your screen, taps the link, and gets a one-click copy of the key.</dd>
-    <dt>Copy link</dt>
-    <dd>Best for sending in <em>chat or email</em>. The link looks like <code>https://fliporium.com/join#k=hskey-…</code>. Anyone who opens it lands on a page that walks them through downloading and pasting the key. (The key lives in the URL fragment — the <code>#</code> bit — so the website's server never sees it.)</dd>
-    <dt>Copy invite text</dt>
-    <dd>Best for sending the <em>whole instruction</em> at once. The text already says &ldquo;Download here, then paste this key&rdquo; — your friend doesn't have to read separate messages.</dd>
-</dl>
+<blockquote>
+    The link carries the room's encryption key in the part after the
+    <code>#</code>, which your browser never sends to any server. That's also
+    why it's worth keeping private: anyone with the link can read the room.
+    To cut someone off, make a new room and share its link instead.
+</blockquote>
 
 <h3>Step 3 — what your friend does</h3>
-<p>
-    Whichever method you used, your friend ends up with the pre-auth key. On
-    their side:
-</p>
 <ol>
-    <li>They download <code>fliporium.exe</code> from <a href="https://fliporium.com">fliporium.com</a> (or via the link you sent).</li>
-    <li>They run it. On the very first launch, a small <em>Welcome to Fliporium</em> window appears and asks for their invite key.</li>
-    <li>They paste the key, click <strong>Join the tailnet</strong>, and within a few seconds they show up on your Floor.</li>
+    <li>They download <code>fliporium.exe</code> from <a href="https://fliporium.com">fliporium.com</a> (the invite link's landing page walks them through it).</li>
+    <li>They run it — Fliporium opens to The Floor.</li>
+    <li>They paste your invite link into the <em>&ldquo;paste an invite link to join…&rdquo;</em> box and hit <strong>join</strong>. Within a couple of seconds you're connected.</li>
 </ol>
 <p>
-    From then on, that device remembers itself. They never need an invite key
-    again on that machine.
+    No account, no key to manage — the link is the whole invite.
 </p>
-
-<blockquote>
-    Pre-auth keys grant tailnet access. Don't paste one into a screenshot,
-    a public chat, or a video stream. If the key is reusable, also rotate
-    it after the friend has joined.
-</blockquote>
 
 <h2 id="chat">Chatting one-to-one</h2>
 <p>
@@ -179,42 +166,42 @@
     <li><strong>Pin</strong> — pin one message at the top of the conversation</li>
 </ul>
 
-<h2 id="booths">Booths</h2>
+<h2 id="rooms">Rooms</h2>
 <p>
-    A booth is a group chat for a small set of people. Click <strong>+</strong>
-    next to <em>Booths</em> on the Floor, name it, pick members, and you're in.
+    A room is a group chat for a small set of people. Click <strong>+</strong>
+    next to <em>Rooms</em> on the Floor, name it, pick members, and you're in.
 </p>
 <p>
-    Each booth has:
+    Each room has:
 </p>
 <ul>
     <li>Its own message history</li>
-    <li>A <strong>shared notepad</strong> — anyone in the booth can edit, everyone sees the changes in real time</li>
+    <li>A <strong>shared notepad</strong> — anyone in the room can edit, everyone sees the changes in real time</li>
     <li>A <strong>Showtime</strong> slot for watching a video together</li>
 </ul>
 <p>
-    Inviting a new member to an existing booth: open the booth, type
+    Inviting a new member to an existing room: open the room, type
     <code>/invite hostname</code>. They'll get a notification and appear in the
-    booth's member list.
+    room's member list.
 </p>
 
 <h2 id="flips">Flipping files</h2>
 <p>
     Drag any file from your file explorer onto an open conversation. That's it.
-    The file is transmitted directly between devices, chunked over the
-    encrypted tailnet, and lands on the other person's disk.
+    The file is transmitted directly between devices over the encrypted
+    peer-to-peer channel, chunked, and lands on the other person's disk.
 </p>
 <ul>
     <li>There's no size limit baked into Fliporium itself — the bottleneck is the slower side's bandwidth.</li>
     <li>Caught files are saved under <code>fliporium-data/inbox/</code>.</li>
     <li>Click a flipped file in chat to open it with whatever app Windows uses for that file type.</li>
-    <li>Drag a file onto a booth instead of a peer to flip it to everyone in the booth at once.</li>
+    <li>Drag a file onto a room instead of a peer to flip it to everyone in the room at once.</li>
 </ul>
 
 <h2 id="showtime">Showtime (watch together)</h2>
 <p>
-    Inside a booth, flip a video file. Once it lands on everyone's disk, click
-    <strong>Start Showtime</strong> at the top of the booth. A video player
+    Inside a room, flip a video file. Once it lands on everyone's disk, click
+    <strong>Start Showtime</strong> at the top of the room. A video player
     appears for everyone.
 </p>
 <ul>
@@ -241,7 +228,7 @@
 <p>
     Hit <kbd>Ctrl + K</kbd> from anywhere in the app to open the search panel.
     Type at least two characters; Fliporium full-text searches every message
-    you've ever sent or received, across every peer and every booth, and ranks
+    you've ever sent or received, across every peer and every room, and ranks
     results by relevance. Click a result to jump to that message in context.
 </p>
 
@@ -254,7 +241,7 @@
     <dt>Twin Mode</dt>
     <dd>Pair another of your devices. See <a href="#twin">above</a>.</dd>
     <dt>Invite a friend</dt>
-    <dd>Generate a QR code from a pre-auth key.</dd>
+    <dd>A reminder of how to invite people: open a room and use its &ldquo;copy invite link&rdquo; button.</dd>
     <dt>Help</dt>
     <dd>Replay the Welcome tour anytime.</dd>
     <dt>Danger zone — Burn Everything</dt>
@@ -262,47 +249,48 @@
 </dl>
 
 <h2 id="privacy">What we can &amp; can't see</h2>
-<p>What we <em>can</em> see, because we run the tailnet's control server:</p>
+<p>What we <em>can</em> see, because we run the signaling server:</p>
 <ul>
-    <li>How many devices have ever joined.</li>
-    <li>How many are signed in right now.</li>
-    <li>That a given device pinged the server (necessary to introduce peers to each other).</li>
+    <li>How many people are connected right now and how many rooms are active.</li>
+    <li>That a connection joined a given room id, and when.</li>
+    <li>The display name a device announces. (There are no accounts, so none of this is tied to a real identity.)</li>
 </ul>
 <p>What we <em>cannot</em> see, ever:</p>
 <ul>
-    <li>Who you messaged.</li>
     <li>What you said.</li>
     <li>What files you flipped.</li>
     <li>What you watched in Showtime.</li>
     <li>Your shared notepad contents.</li>
 </ul>
 <p>
-    Everything in the &ldquo;cannot see&rdquo; list is end-to-end encrypted by
-    WireGuard between your devices. It doesn't route through our server. We
-    couldn't read it even if we wanted to. There is more in
-    <a href="/privacy">our full Privacy statement</a>.
+    Everything in the &ldquo;cannot see&rdquo; list is sealed with a key that
+    lives in the room's invite link and never reaches us — so even the parts
+    that can pass through our servers (a message waiting for someone offline,
+    or a relay for a restrictive network) are ciphertext we can't open. There
+    is more in <a href="/privacy">our full Privacy statement</a>.
 </p>
 
 <h2 id="troubleshooting">Troubleshooting</h2>
 
 <h3>Fliporium opens but says &ldquo;starting…&rdquo; forever</h3>
 <p>
-    The app couldn't reach the Headscale control server. Check your internet.
+    The app couldn't reach our signaling server. Check your internet.
     Look in <code>fliporium-data/fliporium.log</code> next to the .exe — the
     last few lines usually say why.
 </p>
 
-<h3>Someone is on my Floor but their dot is grey</h3>
+<h3>Someone is in my room but their dot is grey</h3>
 <p>
-    They're known to the tailnet but offline right now. As soon as they open
-    their Fliporium and connect, the dot will turn green.
+    They've been in this room but aren't connected right now. As soon as they
+    open Fliporium and rejoin, the dot will turn green. Messages you send
+    meanwhile wait (encrypted) and arrive when they're back.
 </p>
 
 <h3>I dragged a file onto a peer and nothing happened</h3>
 <p>
-    Make sure they're online (green dot). Files only flip between connected
-    peers. If they're offline, the flip will sit queued and complete when they
-    reconnect.
+    Make sure they're connected (green dot). Files flip directly between
+    devices, so both of you need to be online at the same time. If they're
+    offline, flip it again once they're back.
 </p>
 
 <h3>I want to start fresh on this machine</h3>
@@ -330,25 +318,31 @@
     Not yet. A mobile companion is a longer-term thought.
 </p>
 
-<h3>What happens if the Headscale server goes offline?</h3>
+<h3>What happens if the signaling server goes offline?</h3>
 <p>
-    Existing peers stay connected to each other (they've already exchanged
-    keys). New peers won't be able to join until it's back. Routine
-    introductions also pause. The control server's job is matchmaking, not
-    traffic.
+    Peers already connected to each other stay connected — their traffic
+    doesn't route through it. While it's down, new connections and rejoins
+    can't be set up, and messages left for offline people wait until it's
+    back. Its job is matchmaking and passing the encrypted handshake, not
+    carrying your conversations.
 </p>
 
-<h3>Can two Fliporium users on the same Wi-Fi chat without the internet?</h3>
+<h3>Do my messages go through your servers?</h3>
 <p>
-    Only if they've already paired through the control server at some point.
-    After that initial handshake, two peers on the same LAN talk directly over
-    the LAN, no internet hop required.
+    Live conversations go straight between devices. The server only helps
+    peers find each other. The exceptions are deliberately limited and always
+    encrypted: a message you send while someone's offline waits (sealed) on
+    the server until they reconnect, and on very restrictive networks your
+    traffic may be relayed (still sealed) so a connection can happen at all.
+    The room's key lives in its invite link and never reaches us, so we can't
+    read any of it.
 </p>
 
-<h3>Can I run my own Headscale and use my own Fliporium?</h3>
+<h3>Can I run my own signaling server?</h3>
 <p>
-    Yes. Fliporium is designed around a small, self-hostable control server.
-    If you want to run your own friends-and-family deployment, get in touch.
+    Yes. The signaling server is a small standalone program, and the app can
+    be pointed at any instance. If you want to run your own
+    friends-and-family deployment, get in touch.
 </p>
 
 </article>
@@ -404,26 +398,26 @@
     },
     {
       "@type": "Question",
-      "name": "What happens if the Headscale control server goes offline?",
+      "name": "What happens if the signaling server goes offline?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Existing peers stay connected to each other because they've already exchanged keys. New peers won't be able to join until it's back, and routine introductions pause. The control server's job is matchmaking, not carrying your traffic."
+        "text": "Peers already connected to each other stay connected, because their traffic doesn't route through it. While it's down, new connections and rejoins can't be set up and messages left for offline people wait until it's back. Its job is matchmaking and passing the encrypted handshake, not carrying your conversations."
       }
     },
     {
       "@type": "Question",
-      "name": "Can two Fliporium users on the same Wi-Fi chat without the internet?",
+      "name": "Do my messages go through Fliporium's servers?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Only if they've already paired through the control server at some point. After that initial handshake, two peers on the same LAN talk directly over the LAN, with no internet hop required."
+        "text": "Live conversations go straight between devices; the server only helps peers find each other. The exceptions are limited and always encrypted: a message sent while someone is offline waits sealed on the server until they reconnect, and on very restrictive networks traffic may be relayed (still sealed). The room key lives in its invite link and never reaches us, so we can't read any of it."
       }
     },
     {
       "@type": "Question",
-      "name": "Can I run my own Headscale server and my own Fliporium tailnet?",
+      "name": "Can I run my own Fliporium signaling server?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Yes. Fliporium is designed around a small, self-hostable control server. If you want to run your own friends-and-family deployment, get in touch."
+        "text": "Yes. The signaling server is a small standalone program and the app can be pointed at any instance. If you want to run your own friends-and-family deployment, get in touch."
       }
     }
   ]

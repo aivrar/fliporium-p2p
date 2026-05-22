@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Fliporium — Private Peer-to-Peer Chat, File Sharing & Watch Parties</title>
 <meta name="description" content="Fliporium is a free private Windows app for group chat, peer-to-peer file sharing, and synced watch parties with the few people you actually care about. No account, no signup, no tracking — messages and files go straight between your devices, end-to-end encrypted.">
-<meta name="keywords" content="private chat app, peer to peer file sharing, watch party app, no account messaging, encrypted group chat, self-hosted chat, tailnet, send large files free">
+<meta name="keywords" content="private chat app, peer to peer file sharing, watch party app, no account messaging, encrypted group chat, invite link rooms, send large files free">
 <meta name="theme-color" content="#131318">
 <link rel="canonical" href="https://fliporium.com/">
 <meta property="og:type" content="website">
@@ -38,7 +38,7 @@
       "name": "Fliporium",
       "operatingSystem": "Windows 10, Windows 11",
       "applicationCategory": "CommunicationApplication",
-      "description": "A small private Windows desktop app for chatting, sharing files, and watching things together with a handful of people you care about, over your own private tailnet. No accounts, no tracking.",
+      "description": "A small private Windows desktop app for chatting, sharing files, and watching things together with a handful of people you care about, peer-to-peer in rooms you invite people to by link. No accounts, no tracking, end-to-end encrypted.",
       "url": "https://fliporium.com/",
       "downloadUrl": "https://fliporium.com/dl/fliporium.exe",
       "softwareVersion": "0.4.0",
@@ -77,7 +77,7 @@
         <h1>Fliporium</h1>
         <p class="tagline">
             Friends, files, and side-by-side things, <br>
-            over a private little tailnet of your own.
+            in a private little room of your own.
         </p>
         <p class="hero-sub">
             A free Windows app for <strong>private, peer-to-peer chat</strong>,
@@ -88,7 +88,7 @@
         <div class="hero-cta">
             <a class="btn btn-primary" href="/dl/fliporium.exe">
                 <span>Download for Windows</span>
-                <small>~ 34 MB · portable .exe</small>
+                <small>~ 20 MB · portable .exe</small>
             </a>
             <a class="btn btn-ghost" href="/docs">Read the docs →</a>
         </div>
@@ -107,12 +107,12 @@
         travel with the file.
     </p>
     <p>
-        There's no signup. No account. No central server reading your messages.
-        Fliporium peers find each other over a private
-        <a href="https://tailscale.com/kb/1151/what-is-tailscale" target="_blank" rel="noopener">tailnet</a>
-        and talk directly, encrypted end-to-end by WireGuard. The only public
-        infrastructure is the control plane that introduces peers to each other —
-        and it never sees a single message.
+        There's no signup. No account. You create a room, share its invite
+        link, and the people who have it connect <strong>peer-to-peer</strong> —
+        chat, files, and video flow directly between your devices, encrypted
+        end-to-end. The only public infrastructure is a small server that
+        introduces peers to each other and passes along the encrypted
+        handshake. It never holds the key to a single message.
     </p>
 </section>
 
@@ -128,8 +128,8 @@
 
         <article class="feature">
             <div class="feature-icon" aria-hidden="true">🪑</div>
-            <h3>Booths</h3>
-            <p>Pull a few people into a private corner for a group chat. Each booth has its own little shared notepad.</p>
+            <h3>Rooms</h3>
+            <p>Create a room and share its invite link. Everyone who has it lands in the same private space, with its own shared notepad.</p>
         </article>
 
         <article class="feature">
@@ -141,13 +141,13 @@
         <article class="feature">
             <div class="feature-icon" aria-hidden="true">🎬</div>
             <h3>Showtime</h3>
-            <p>Start a video inside a booth and everyone watches together, in sync. Pause for snacks, resume on the same frame.</p>
+            <p>Start a video inside a room and everyone watches together, in sync. Pause for snacks, resume on the same frame.</p>
         </article>
 
         <article class="feature">
             <div class="feature-icon" aria-hidden="true">🎟️</div>
             <h3>Invite a friend</h3>
-            <p>Backstage → Invite. Send a QR code, a link, or a copy-pasteable message — whichever fits. They follow it once, and they're on your Floor.</p>
+            <p>Hit &ldquo;copy invite link&rdquo; in your room and send it however you like. They paste it into Fliporium and they're in — no account, no key.</p>
         </article>
 
         <article class="feature">
@@ -166,16 +166,18 @@
         friends. Fliporium isn't a company. It's just an app.
     </p>
     <p>
-        The server we run does one job: introduce two peers so they can find
-        each other. After that, your devices speak directly. The server never
-        sees the connection. We don't keep logs of who you talk to, we don't
-        scan files, we don't have an &ldquo;ML team&rdquo;, and we don't have
-        ads to sell.
+        The server we run introduces peers and passes the encrypted handshake
+        so they can connect. Your messages are sealed with a key that lives in
+        the room's invite link and never reaches us — so even the bits that
+        can pass through our servers (a message left for someone offline, or a
+        relay for a tricky network) are ciphertext we can't open. We don't scan
+        files, we don't have an &ldquo;ML team&rdquo;, and we don't have ads to
+        sell.
     </p>
     <p>
         We <em>do</em> count how many times the <code>.exe</code> has been
-        downloaded, and how many people are currently signed into the tailnet,
-        so we can tell whether anyone is finding this useful. Those numbers
+        downloaded and how many people are connected right now, so we can tell
+        whether anyone is finding this useful. Those numbers
         are <a href="/stats">public</a>.
     </p>
 </section>
@@ -189,11 +191,11 @@
         </li>
         <li>
             <strong>Run it.</strong>
-            Double-click. On the very first launch, a small Welcome window asks for an invite key. (If you set up the tailnet yourself, you've got one. Otherwise, ask whoever invited you — they generate it from <em>Backstage → Invite a friend</em>.)
+            Double-click. Fliporium opens to The Floor. Create a room, or paste an invite link someone sent you to join theirs.
         </li>
         <li>
             <strong>Invite the next person.</strong>
-            Open <em>Backstage → Invite a friend</em>. You get three equivalent ways to send the invite: a QR code (in person), a clickable link (chat/email), or a whole copy-pasteable message. <a href="/docs#invite">More in the docs.</a>
+            In your room, hit <em>&ldquo;copy invite link&rdquo;</em> and send it however you like — chat, email, in person. They paste it in and they're with you. <a href="/docs#invite">More in the docs.</a>
         </li>
     </ol>
     <div class="quickstart-cta">

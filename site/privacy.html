@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Fliporium Privacy — End-to-End Encrypted, No Accounts, No Tracking</title>
-<meta name="description" content="Fliporium's privacy model in plain language: no ads, no third-party trackers, no cookies, no message logging. Your chats, files, and watch parties are end-to-end encrypted directly between devices — the control server introduces peers but can never read what they send.">
+<meta name="description" content="Fliporium's privacy model in plain language: no ads, no third-party trackers, no cookies, no message logging. Your chats, files, and watch parties are end-to-end encrypted — the signaling server introduces peers but can never read what they send.">
 <meta name="keywords" content="private messaging privacy, end to end encrypted chat, no tracking, no cookies, encrypted file sharing, what data is collected">
 <meta name="theme-color" content="#131318">
 <link rel="canonical" href="https://fliporium.com/privacy">
@@ -53,43 +53,49 @@
 </ul>
 <p>From the desktop app:</p>
 <ul>
-    <li>When you launch Fliporium, your device contacts our Headscale control server to register or refresh its tailnet membership. That handshake includes your device's public key and a hostname you choose.</li>
-    <li>That's all. The control server's job is introducing peers to each other, not relaying messages.</li>
+    <li>When you open a room, your device connects to our signaling server and sends the room's id, a display name you pick, and the WebRTC connection handshake (the network info two devices need to find each other). It does <em>not</em> send your messages.</li>
+    <li>If your network is too restrictive for a direct connection, your device may fall back to relaying its traffic through our TURN server. That traffic stays encrypted end-to-end — we can see that a relay is happening, not what's in it.</li>
+    <li>A message you send while everyone else is offline is held — encrypted — on the signaling server for up to 14 days, then handed to the next person who opens the room and dropped after expiry.</li>
 </ul>
 
 <h2>What we can see</h2>
 <p>
-    Because we operate the control server, we can see:
+    Because we operate the signaling server, we can see connection metadata:
 </p>
 <ul>
-    <li>How many unique devices have ever registered.</li>
-    <li>Which devices are connected right now, and roughly how long they've been connected.</li>
-    <li>The hostname each device chose for itself.</li>
+    <li>How many devices are connected right now and how many rooms are active.</li>
+    <li>That a connection joined a particular room id, and when.</li>
+    <li>The display name a device announces for itself.</li>
 </ul>
 <p>
-    Two of these numbers (total registered devices, currently connected) are
-    <a href="/stats">published openly</a>. That's the only &ldquo;tracking&rdquo;
-    we do, and it covers the whole tailnet in aggregate — no per-user data.
+    There are no accounts, so none of this is tied to a real identity. The
+    aggregate counts (people connected, rooms active) are
+    <a href="/stats">published openly</a> — that's the only &ldquo;tracking&rdquo;
+    we do, and it's whole-system totals, no per-user data.
 </p>
 
 <h2>What we can't see, ever</h2>
 <p>
-    Once two peers have been introduced, they talk directly over an encrypted
-    WireGuard tunnel between their devices. The control server isn't in that
-    path. We physically cannot intercept, decrypt, or log any of the
-    following, regardless of what someone might ask us to do:
+    Once two peers connect, chat, files, Showtime, and notepad flow directly
+    between their devices over an encrypted channel. On top of that, every
+    room's traffic is sealed with a key carried in the room's invite link —
+    a key that lives in the link's <code>#</code> fragment, which your browser
+    never sends to us, and which our servers never receive. So even the parts
+    that <em>do</em> pass through us — the offline backlog and any
+    TURN-relayed traffic — are ciphertext we can't open. We cannot intercept,
+    decrypt, or log any of the following, regardless of what someone might ask
+    us to do:
 </p>
 <ul>
     <li>The contents of your messages.</li>
-    <li>Who you messaged or when.</li>
     <li>The files you flipped (or even that a flip happened).</li>
     <li>What you watched in Showtime.</li>
-    <li>The contents of any booth notepad.</li>
+    <li>The contents of any room notepad.</li>
     <li>Your reactions, edits, deletes, or pins.</li>
 </ul>
 <p>
-    Encryption keys are generated and held only by your devices. We never see
-    them.
+    Room keys are generated on your device and shared only through the invite
+    link you send your friends. We never see them.
 </p>
 
 <h2>Cookies, ads, third parties</h2>
