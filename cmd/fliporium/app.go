@@ -222,15 +222,30 @@ func env(key, fallback string) string {
 // the transport coming up.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	a.hostname = env("FLIPORIUM_HOSTNAME", "fliporium-gui")
 	a.dataDir = env("FLIPORIUM_DIR", defaultDataDir())
+	// The routing/signaling id MUST be unique per install — two peers sharing
+	// an id collide on the signaling server and can never connect. Default to
+	// the install's stable Ed25519 fingerprint; FLIPORIUM_HOSTNAME overrides
+	// (used by tests/dev to run several peers on one box).
+	routingID := env("FLIPORIUM_HOSTNAME", "")
 	if id, err := identity.Load(a.dataDir); err == nil {
 		a.identity = id
+		if routingID == "" {
+			routingID = "fp-" + id.ID()
+		}
 		log.Printf("startup: identity %s", id.ID())
 	} else {
 		log.Printf("startup: identity load failed: %v", err)
 	}
-	log.Printf("startup: ctx=%v hostname=%s dir=%s", ctx != nil, a.hostname, a.dataDir)
+	if routingID == "" {
+		// No identity and no override: fall back to a random id so we never
+		// collide with another install.
+		var b [8]byte
+		_, _ = cryptoRand.Read(b[:])
+		routingID = "fp-" + base64.RawURLEncoding.EncodeToString(b[:])
+	}
+	a.hostname = routingID
+	log.Printf("startup: ctx=%v id=%s dir=%s", ctx != nil, a.hostname, a.dataDir)
 
 	go a.initBackground()
 }
