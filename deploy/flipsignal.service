@@ -1,0 +1,24 @@
+[Unit]
+Description=Fliporium signaling/matchmaking server
+Documentation=https://fliporium.com
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Listens on loopback only; Caddy terminates TLS and reverse-proxies wss
+# from https://fliporium.com/ws. It relays only the WebRTC handshake
+# (SDP/ICE) between room members and stores nothing.
+DynamicUser=yes
+ExecStart=/usr/local/bin/flipsignal -listen 127.0.0.1:8090
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

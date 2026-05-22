@@ -43,6 +43,11 @@ fliporium.com, www.fliporium.com {
 	handle /api/contact {
 		reverse_proxy 127.0.0.1:8088
 	}
+	# WebRTC signaling (WebSocket). Caddy upgrades + proxies to flipsignal on
+	# loopback. The server only relays the handshake; it sees no message content.
+	handle /ws {
+		reverse_proxy 127.0.0.1:8090
+	}
 	handle /dl/* {
 		reverse_proxy 127.0.0.1:8088
 	}

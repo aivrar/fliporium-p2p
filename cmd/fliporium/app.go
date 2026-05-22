@@ -23,9 +23,9 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// defaultSignalURL is the public signaling server. Override with FLIPORIUM_SIGNAL
-// for local development.
-const defaultSignalURL = "wss://signal.fliporium.com/ws"
+// defaultSignalURL is the public signaling server (served by Caddy on the main
+// domain). Override with FLIPORIUM_SIGNAL for local development.
+const defaultSignalURL = "wss://fliporium.com/ws"
 
 // AppState describes where the App is in its lifecycle.
 type AppState string
