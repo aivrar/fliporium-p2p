@@ -234,6 +234,12 @@ type App struct {
 	room          *rtc.Room
 	currentRoomID string
 
+	// pendingFlips holds files added to a room while no one else was present,
+	// keyed by room id. They're sent to the next person who joins (files
+	// transfer live and don't have a server-side backlog like messages do).
+	pendingMu    sync.Mutex
+	pendingFlips map[string][]string
+
 	statusMu   sync.Mutex
 	peerStatus map[string]string // peer name -> "active"|"idle"|"away"
 	myStatus   string
@@ -336,6 +342,7 @@ func (a *App) initWebRTC(signalURL string) {
 	a.hub = peer.NewHub()
 	a.hub.CatchRoot = filepath.Join(a.dataDir, "catch")
 	a.hub.SetSelfDisplay(a.displayName())
+	a.pendingFlips = map[string][]string{}
 	go a.eventPump()
 	a.setState(StateReady, "")
 
@@ -568,6 +575,8 @@ func (a *App) eventPump() {
 			a.roomMu.Unlock()
 			if cur != "" {
 				_ = a.store.AddBoothMember(a.ctx, cur, ev.Peer, ev.At)
+				// Deliver anything queued while the room was empty.
+				a.flushPendingFlips(cur, ev.Peer)
 			}
 			wailsruntime.EventsEmit(a.ctx, "peer-state-changed", map[string]any{
 				"peer":      ev.Peer,
@@ -1871,9 +1880,34 @@ func (a *App) SendBoothFlip(boothID, localPath string) (string, error) {
 		if firstErr != nil {
 			return id, firstErr
 		}
-		return id, fmt.Errorf("no booth members reachable")
+		// No one's here yet. Queue the file so it sends to the next person who
+		// joins, rather than failing outright.
+		a.pendingMu.Lock()
+		a.pendingFlips[boothID] = append(a.pendingFlips[boothID], localPath)
+		a.pendingMu.Unlock()
+		name := filepath.Base(localPath)
+		wailsruntime.EventsEmit(a.ctx, "notice", "Queued "+name+" — it'll send when someone joins the room.")
+		return id, nil
 	}
 	return id, nil
+}
+
+// flushPendingFlips sends any files queued for a room (while it was empty) to
+// a peer that just joined.
+func (a *App) flushPendingFlips(boothID, peerName string) {
+	a.pendingMu.Lock()
+	paths := a.pendingFlips[boothID]
+	delete(a.pendingFlips, boothID)
+	a.pendingMu.Unlock()
+	for _, p := range paths {
+		id, err := newBoothID()
+		if err != nil {
+			continue
+		}
+		if err := a.hub.SendFlipWithID(peerName, p, id); err != nil {
+			log.Printf("flush pending flip %q to %s: %v", p, peerName, err)
+		}
+	}
 }
 
 // PickAndSendFlip pops the OS file picker (multi-select), then flips each

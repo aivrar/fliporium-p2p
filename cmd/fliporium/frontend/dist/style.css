@@ -363,8 +363,8 @@ html[data-theme="light"] .msg-toolbar button:hover { background: #ece4ff; color:
     background: transparent;
     border: none;
     cursor: pointer;
-    font-size: 16px;
-    padding: 0 4px;
+    font-size: 22px;
+    padding: 2px 5px;
     line-height: 1;
 }
 .reaction-picker button:hover { transform: scale(1.2); }

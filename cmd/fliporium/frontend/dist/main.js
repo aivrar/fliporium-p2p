@@ -1428,6 +1428,7 @@ function bindEvents() {
     });
 
     window.runtime.EventsOn("flip", (f) => upsertFlip(f));
+    window.runtime.EventsOn("notice", (msg) => toast(msg, 4000));
 
     window.runtime.EventsOn("booth", (b) => upsertBooth(b));
 
