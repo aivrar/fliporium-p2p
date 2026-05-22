@@ -7,9 +7,13 @@ Wants=network-online.target
 [Service]
 Type=simple
 # Listens on loopback only; Caddy terminates TLS and reverse-proxies wss
-# from https://fliporium.com/ws. It relays only the WebRTC handshake
-# (SDP/ICE) between room members and stores nothing.
+# from https://fliporium.com/ws. It relays the WebRTC handshake (SDP/ICE),
+# mints short-lived TURN credentials, and holds an encrypted message backlog
+# — it never sees decrypted content.
 DynamicUser=yes
+# Holds FLIPSIGNAL_TURN_SECRET (= coturn static-auth-secret) + FLIPSIGNAL_TURN_URLS.
+# Optional ("-"): without it, TURN is simply disabled.
+EnvironmentFile=-/etc/flipsignal/turn.env
 ExecStart=/usr/local/bin/flipsignal -listen 127.0.0.1:8090
 Restart=on-failure
 RestartSec=3

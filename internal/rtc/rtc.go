@@ -12,8 +12,16 @@ import (
 )
 
 // DefaultSTUN is Google's public STUN server — fine for the proof. Production
-// will add a TURN relay for hard NATs.
+// adds a TURN relay (minted by the signaling server) for hard NATs.
 var DefaultSTUN = []string{"stun:stun.l.google.com:19302"}
+
+// STUNServers builds an ICE server list from STUN URLs (no credentials).
+func STUNServers(urls []string) []webrtc.ICEServer {
+	if len(urls) == 0 {
+		return nil
+	}
+	return []webrtc.ICEServer{{URLs: urls}}
+}
 
 // Connect establishes a single WebRTC peer connection to `remote` and returns
 // the opened DataChannel as an io.ReadWriteCloser (detached), so callers can
@@ -24,18 +32,14 @@ var DefaultSTUN = []string{"stun:stun.l.google.com:19302"}
 //   - `offerer` decides who initiates (exactly one side must be the offerer).
 //
 // It blocks until the DataChannel opens or ctx is cancelled.
-func Connect(ctx context.Context, send func(Sig) error, in <-chan Sig, self, remote string, offerer bool, stun []string) (io.ReadWriteCloser, error) {
+func Connect(ctx context.Context, send func(Sig) error, in <-chan Sig, self, remote string, offerer bool, ice []webrtc.ICEServer) (io.ReadWriteCloser, error) {
 	se := webrtc.SettingEngine{}
 	se.DetachDataChannels() // makes dc.Detach() return an io.ReadWriteCloser
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(se))
 
 	// No ICE servers when none are configured (e.g. same-machine tests use host
-	// candidates only); an ICEServer with empty URLs would error.
-	var cfg webrtc.Configuration
-	if len(stun) > 0 {
-		cfg.ICEServers = []webrtc.ICEServer{{URLs: stun}}
-	}
-	pc, err := api.NewPeerConnection(cfg)
+	// candidates only).
+	pc, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: ice})
 	if err != nil {
 		return nil, fmt.Errorf("new peer connection: %w", err)
 	}

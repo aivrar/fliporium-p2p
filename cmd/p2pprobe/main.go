@@ -56,7 +56,7 @@ func main() {
 				role = "offerer"
 			}
 			log.Printf("[%s] connecting to %q as %s", *self, remote, role)
-			rwc, err := rtc.Connect(ctx, send, peerChan, *self, remote, offerer, rtc.DefaultSTUN)
+			rwc, err := rtc.Connect(ctx, send, peerChan, *self, remote, offerer, rtc.STUNServers(rtc.DefaultSTUN))
 			if err != nil {
 				log.Fatalf("[%s] connect: %v", *self, err)
 			}

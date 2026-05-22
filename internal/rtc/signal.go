@@ -47,7 +47,17 @@ type Sig struct {
 	Cand  json.RawMessage `json:"cand,omitempty"`  // ICE candidate (webrtc.ICECandidateInit)
 	Blob  string          `json:"blob,omitempty"`  // store: one encrypted message blob
 	Blobs []string        `json:"blobs,omitempty"` // backlog: the room's stored encrypted blobs
+	Turn  *TurnCreds      `json:"turn,omitempty"`  // peers: short-lived TURN relay credentials
 	Msg   string          `json:"msg,omitempty"`   // error detail
+}
+
+// TurnCreds are short-lived TURN relay credentials minted by the signaling
+// server (coturn use-auth-secret / TURN REST API style). Used by peers behind
+// hard NATs that can't hole-punch directly.
+type TurnCreds struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username"`
+	Credential string   `json:"credential"`
 }
 
 // SignalClient is a WebSocket connection to the signaling server. Incoming

@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"sync"
+
+	"github.com/pion/webrtc/v4"
 )
 
 // Room joins a signaling room and maintains a full WebRTC mesh: it opens a
@@ -18,7 +20,6 @@ type Room struct {
 	sig  *SignalClient
 	self string
 	room string
-	stun []string
 
 	// OnPeer fires (in its own goroutine) when a DataChannel to remoteID opens.
 	OnPeer func(remoteID string, rwc io.ReadWriteCloser, initiator bool)
@@ -27,8 +28,10 @@ type Room struct {
 	// OnBacklog fires once on join with the room's stored encrypted blobs.
 	OnBacklog func(blobs []string)
 
-	mu    sync.Mutex
-	peers map[string]chan Sig // remoteID -> per-peer signaling inbox
+	mu      sync.Mutex
+	peers   map[string]chan Sig // remoteID -> per-peer signaling inbox
+	ice     []webrtc.ICEServer  // STUN (static) + TURN (from the server on join)
+	turnSet bool
 }
 
 // Store appends an encrypted blob to the room's offline backlog on the server.
@@ -42,13 +45,42 @@ func JoinRoom(ctx context.Context, signalURL, room, self string, stun []string) 
 	if err != nil {
 		return nil, err
 	}
+	var ice []webrtc.ICEServer
+	if len(stun) > 0 {
+		ice = []webrtc.ICEServer{{URLs: stun}}
+	}
 	return &Room{
 		sig:   sig,
 		self:  self,
 		room:  room,
-		stun:  stun,
 		peers: map[string]chan Sig{},
+		ice:   ice,
 	}, nil
+}
+
+// applyTurn merges server-issued TURN credentials into the ICE server list
+// (once). Called before starting peer connections so they can relay.
+func (r *Room) applyTurn(t *TurnCreds) {
+	if t == nil || len(t.URLs) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.turnSet {
+		return
+	}
+	r.ice = append(r.ice, webrtc.ICEServer{
+		URLs:       t.URLs,
+		Username:   t.Username,
+		Credential: t.Credential,
+	})
+	r.turnSet = true
+}
+
+func (r *Room) iceServers() []webrtc.ICEServer {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]webrtc.ICEServer(nil), r.ice...)
 }
 
 // Self returns this member's id.
@@ -69,6 +101,7 @@ func (r *Room) Run(ctx context.Context) error {
 			}
 			switch m.Type {
 			case SigPeers:
+				r.applyTurn(m.Turn) // adopt relay creds before connecting
 				for _, id := range m.Peers {
 					r.startPeer(ctx, id, true) // we arrived later → we offer
 				}
@@ -101,7 +134,7 @@ func (r *Room) startPeer(ctx context.Context, remote string, offerer bool) chan 
 
 	go func() {
 		send := func(s Sig) error { return r.sig.Send(ctx, s) }
-		rwc, err := Connect(ctx, send, ch, r.self, remote, offerer, r.stun)
+		rwc, err := Connect(ctx, send, ch, r.self, remote, offerer, r.iceServers())
 		if err != nil {
 			r.dropPeer(remote)
 			return

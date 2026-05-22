@@ -2,6 +2,9 @@ package rtc
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -46,6 +49,32 @@ type Server struct {
 	total   int                                 // concurrent connections across all rooms
 	// Verbose logs each relayed signal (handy for the proof; off by default).
 	Verbose bool
+	// TURN: when TurnSecret + TurnURLs are set, mint short-lived relay
+	// credentials for each joining peer (coturn use-auth-secret scheme).
+	TurnSecret string
+	TurnURLs   []string
+	TurnTTL    time.Duration
+}
+
+// turnCreds mints time-limited TURN credentials, or nil if TURN isn't
+// configured. username = "<expiry-unix>"; credential = base64(HMAC-SHA1(secret,
+// username)) — the coturn REST-API / use-auth-secret convention.
+func (s *Server) turnCreds() *TurnCreds {
+	if s.TurnSecret == "" || len(s.TurnURLs) == 0 {
+		return nil
+	}
+	ttl := s.TurnTTL
+	if ttl <= 0 {
+		ttl = 12 * time.Hour
+	}
+	user := fmt.Sprintf("%d", time.Now().Add(ttl).Unix())
+	mac := hmac.New(sha1.New, []byte(s.TurnSecret))
+	mac.Write([]byte(user))
+	return &TurnCreds{
+		URLs:       s.TurnURLs,
+		Username:   user,
+		Credential: base64.StdEncoding.EncodeToString(mac.Sum(nil)),
+	}
 }
 
 // mutexWithBacklog is just a sync.Mutex; the alias documents that it guards
@@ -241,7 +270,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logf("join: peer=%s room=%s (now %d members)", c.id, room, len(others)+1)
 
-	c.send(Sig{Type: SigPeers, Room: room, Peers: others})
+	c.send(Sig{Type: SigPeers, Room: room, Peers: others, Turn: s.turnCreds()})
 	// Hand the newcomer the room's encrypted backlog so they see recent
 	// history even if the senders are now offline.
 	if bl := s.roomBacklog(room); len(bl) > 0 {
