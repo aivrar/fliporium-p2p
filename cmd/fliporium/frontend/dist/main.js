@@ -1022,24 +1022,6 @@ function bindBackstage() {
         closeBackstage();
         showTour(0);
     });
-    $("bs-invite-go").addEventListener("click", async () => {
-        const key = $("bs-invite-key").value.trim();
-        if (!key) { toast("paste a pre-auth key first"); return; }
-        try {
-            const [dataUrl, link, text] = await Promise.all([
-                window.go.main.App.GenerateInviteQR(key),
-                window.go.main.App.GenerateInviteURL(key),
-                window.go.main.App.GenerateInviteText(key),
-            ]);
-            $("bs-invite-qr").innerHTML = `<img src="${dataUrl}" alt="invite QR">`;
-            $("bs-invite-text").textContent = text;
-            $("bs-invite-out").classList.remove("hidden");
-            $("bs-invite-out").dataset.link = link;
-            $("bs-invite-out").dataset.text = text;
-        } catch (e) { toast("invite: " + e); }
-    });
-    $("bs-invite-copy-link").addEventListener("click", () => copyInvite("link"));
-    $("bs-invite-copy-text").addEventListener("click", () => copyInvite("text"));
     // Burn-everything: arm the button only when the user types the magic phrase.
     $("bs-burn-confirm").addEventListener("input", () => {
         $("bs-burn-go").disabled = $("bs-burn-confirm").value !== "burn everything";
@@ -1051,71 +1033,6 @@ function bindBackstage() {
             await window.go.main.App.BurnEverything("burn everything");
         } catch (e) { toast("burn: " + e); }
     });
-}
-
-async function copyInvite(which) {
-    const out = $("bs-invite-out");
-    const payload = which === "link" ? out.dataset.link : out.dataset.text;
-    const btn = which === "link" ? $("bs-invite-copy-link") : $("bs-invite-copy-text");
-    if (!payload) return;
-    try {
-        await navigator.clipboard.writeText(payload);
-        const oldLabel = btn.textContent;
-        btn.textContent = which === "link" ? "Link copied" : "Text copied";
-        btn.classList.add("copied");
-        setTimeout(() => {
-            btn.textContent = oldLabel;
-            btn.classList.remove("copied");
-        }, 1600);
-    } catch (e) {
-        toast("copy failed: " + e);
-    }
-}
-
-// ---------- first-launch onboarding (no auth key yet) ----------
-
-function bindOnboard() {
-    const submit = async () => {
-        const input = $("onboard-key");
-        const err = $("onboard-error");
-        const btn = $("onboard-go");
-        const key = input.value.trim();
-        err.classList.add("hidden");
-        err.textContent = "";
-        if (!key.startsWith("hskey-")) {
-            err.textContent = "Invite keys start with \"hskey-\". Double-check what you pasted.";
-            err.classList.remove("hidden");
-            return;
-        }
-        btn.disabled = true;
-        btn.textContent = "Connecting…";
-        try {
-            await window.go.main.App.SetAuthKey(key);
-            // Server-side will move app state to initializing/ready; overlay
-            // closes when we observe StateReady (see updateForState below).
-        } catch (e) {
-            btn.disabled = false;
-            btn.textContent = "Join the tailnet";
-            err.textContent = String(e);
-            err.classList.remove("hidden");
-        }
-    };
-    $("onboard-go").addEventListener("click", submit);
-    $("onboard-key").addEventListener("keydown", (e) => {
-        if (e.key === "Enter") { e.preventDefault(); submit(); }
-    });
-}
-
-function updateForState() {
-    const overlay = $("onboard-overlay");
-    if (!overlay) return;
-    if (state.appState === "needs-auth-key") {
-        overlay.classList.remove("hidden");
-        // Defer focus so the input is visible before we grab it.
-        setTimeout(() => $("onboard-key").focus(), 50);
-    } else {
-        overlay.classList.add("hidden");
-    }
 }
 
 // ---------- status auto-detect ----------
@@ -1171,7 +1088,7 @@ async function loadTheme() {
 // ---------- tour ----------
 
 const TOUR_STEPS = [
-    { icon: "🎪", title: "Welcome to Fliporium", body: "A small private place for you and the people you care about. Built on a tailnet you own — no central server holds your messages." },
+    { icon: "🎪", title: "Welcome to Fliporium", body: "A small private place for you and the people you care about. Create a room, share the invite link, and your chats and files go peer-to-peer — straight between your devices." },
     { icon: "🪁", title: "Flip a file", body: "Drag any file onto a peer's chat to send it. There's no size cap. Files land in the other person's Catch folder, right next to their copy of the app." },
     { icon: "📥", title: "Catch", body: "Caught files render inline when they can — images, video, audio, PDFs, code. Click 'open' to hand them off to your default app." },
     { icon: "🎪", title: "Booths", body: "A Booth is a named group room. Anyone in a Booth can post, drop files, take notes together, or fire up a Watch Party. The + next to BOOTHS makes a new one." },
@@ -1431,19 +1348,10 @@ function bindEvents() {
         state.appState = status.state;
         state.self = status.self;
         renderSelf();
-        updateForState();
         if (status.state === "ready") {
             await refreshPeers();
             await refreshBooths();
-            if (!state.selection && state.peers.length > 0) {
-                const pick = state.peers.find(p => p.connected)
-                    || state.peers.find(p => p.tailnetOnline)
-                    || state.peers[0];
-                if (pick) selectPeer(pick.name);
-            }
-        } else if (status.state !== "needs-auth-key" && status.message) {
-            // Don't toast the "paste your invite key" message — the modal
-            // already conveys it. Toast only for the error/initializing cases.
+        } else if (status.message) {
             toast(status.message, 4000);
         }
     });
@@ -1533,7 +1441,6 @@ async function boot() {
     bindSearch();
     bindBackstage();
     bindTour();
-    bindOnboard();
     bindDragDrop();
     bindEvents();
     bindStatusTracking();
@@ -1546,11 +1453,10 @@ async function boot() {
         state.appState = status.state;
         state.self = status.self;
         renderSelf();
-        updateForState();
         if (status.state === "ready") {
             await refreshPeers();
             await refreshBooths();
-        } else if (status.state !== "needs-auth-key" && status.message) {
+        } else if (status.message) {
             toast(status.message, 4000);
         }
     } catch (e) { console.warn("initial status:", e); }
