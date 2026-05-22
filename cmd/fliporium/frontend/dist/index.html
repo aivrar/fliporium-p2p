@@ -27,20 +27,20 @@
     <aside id="floor">
         <div class="panel-title">The Floor</div>
 
-        <div class="floor-section-title">Peers</div>
+        <div class="floor-section-title">In this room</div>
         <ul id="peers" class="peers"></ul>
-        <div id="floor-empty" class="empty hidden">no peers visible yet</div>
+        <div id="floor-empty" class="empty hidden">no one else here yet</div>
 
         <div class="floor-section-title">
-            <span>Booths</span>
-            <button id="createBoothBtn" class="link-btn" title="create a booth">+</button>
+            <span>Rooms</span>
+            <button id="createBoothBtn" class="link-btn" title="create a room">+</button>
         </div>
         <ul id="booths" class="peers"></ul>
-        <div id="booths-empty" class="empty">no booths yet</div>
+        <div id="booths-empty" class="empty">no rooms yet — create one or join via a link</div>
 
         <div class="floor-add">
-            <input id="connectInput" placeholder="connect to hostname..." autocomplete="off">
-            <button id="connectBtn" title="dial">go</button>
+            <input id="connectInput" placeholder="paste an invite link to join..." autocomplete="off">
+            <button id="connectBtn" title="join this room">join</button>
         </div>
     </aside>
 
@@ -48,6 +48,7 @@
         <div id="chat-header">
             <span id="chat-title">select a peer on The Floor</span>
             <span id="chat-state"></span>
+            <button id="copyInviteBtn" class="topbar-btn hidden" title="copy this room's invite link">copy invite link</button>
         </div>
         <div id="pinned-banner" class="pinned-banner hidden"></div>
         <div id="notepad-panel" class="hidden">

@@ -518,11 +518,12 @@ function renderChat() {
     list.innerHTML = "";
     renderPinnedBanner();
     if (!state.selection) {
-        $("chat-title").textContent = "select a peer or booth on The Floor";
+        $("chat-title").textContent = "create a room or pick one on The Floor";
         $("chat-state").textContent = "";
         $("composerInput").disabled = true;
         $("sendBtn").disabled = true;
         $("attachBtn").disabled = true;
+        $("copyInviteBtn").classList.add("hidden");
         return;
     }
     if (state.selection.kind === "peer") {
@@ -530,6 +531,8 @@ function renderChat() {
     } else if (state.selection.kind === "booth") {
         renderChatBooth(state.selection.key, list);
     }
+    // Copy-invite is only meaningful for a room (booth) selection.
+    $("copyInviteBtn").classList.toggle("hidden", !state.selection || state.selection.kind !== "booth");
     list.scrollTop = list.scrollHeight;
 }
 
@@ -733,6 +736,9 @@ async function selectBooth(boothId) {
     state.selection = { kind: "booth", key: boothId };
     state.unreadBooths.delete(boothId);
     renderFloor();
+
+    // Entering a room joins its peer-to-peer mesh (best-effort).
+    try { await window.go.main.App.SwitchRoom(boothId); } catch (e) { /* not on webrtc transport */ }
 
     if (!state.msgsByBooth.has(boothId)) {
         try {
@@ -1330,35 +1336,43 @@ function bindComposer() {
     });
 
     $("createBoothBtn").addEventListener("click", async () => {
-        const name = prompt("Booth name?");
+        const name = prompt("Name your room");
         if (!name) return;
-        const onlinePeers = state.peers.filter(p => p.tailnetOnline).map(p => p.name);
-        const memberStr = prompt(
-            "Members (comma-separated peer names).\n" +
-            (onlinePeers.length ? "Online peers: " + onlinePeers.join(", ") : "(no peers visible yet)"),
-            onlinePeers.join(", "));
-        if (memberStr === null) return;
-        const members = memberStr.split(",").map(s => s.trim()).filter(Boolean);
         try {
-            const id = await window.go.main.App.CreateBooth(name, members);
+            const room = await window.go.main.App.CreateRoom(name);
             await refreshBooths();
-            if (id) selectBooth(id);
+            if (room && room.id) await selectBooth(room.id);
+            toast("Room created — hit “copy invite link” to invite people", 4000);
         } catch (e) {
-            toast("create booth: " + e);
+            toast("create room: " + e);
+        }
+    });
+
+    $("copyInviteBtn").addEventListener("click", async () => {
+        if (!state.selection || state.selection.kind !== "booth") return;
+        try {
+            const link = await window.go.main.App.RoomLinkFor(state.selection.key);
+            await navigator.clipboard.writeText(link);
+            const btn = $("copyInviteBtn");
+            const old = btn.textContent;
+            btn.textContent = "link copied ✓";
+            setTimeout(() => { btn.textContent = old; }, 1600);
+        } catch (e) {
+            toast("copy invite: " + e);
         }
     });
 
     $("connectBtn").addEventListener("click", async () => {
-        const name = $("connectInput").value.trim();
-        if (!name) return;
+        const link = $("connectInput").value.trim();
+        if (!link) return;
         try {
-            await window.go.main.App.Connect(name);
+            const room = await window.go.main.App.JoinRoomByLink(link);
             $("connectInput").value = "";
-            toast("connecting to " + name + "...");
-            await refreshPeers();
-            selectPeer(name);
+            await refreshBooths();
+            if (room && room.id) await selectBooth(room.id);
+            toast("joined " + (room && room.name ? room.name : "room"));
         } catch (e) {
-            toast("connect: " + e);
+            toast("join: " + e);
         }
     });
     $("connectInput").addEventListener("keydown", (e) => {
