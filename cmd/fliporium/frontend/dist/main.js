@@ -766,6 +766,16 @@ async function selectBooth(boothId) {
             state.msgsByBooth.set(boothId, []);
         }
     }
+    // Reload the room's media history so files persist across restarts, not
+    // just text. Flips are stored per-peer, so seed each sender's map.
+    try {
+        const flips = await window.go.main.App.ListBoothFlips(boothId);
+        for (const f of (flips || [])) {
+            if (!state.flipsByPeer.has(f.peer)) state.flipsByPeer.set(f.peer, new Map());
+            state.flipsByPeer.get(f.peer).set(f.id, f);
+        }
+    } catch (e) { /* leave media empty on error */ }
+
     renderChat();
 }
 

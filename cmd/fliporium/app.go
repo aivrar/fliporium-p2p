@@ -1988,24 +1988,60 @@ func (a *App) ListFlips(peerName string) ([]FlipRecord, error) {
 	}
 	out := make([]FlipRecord, 0, len(rows))
 	for _, r := range rows {
-		rec := FlipRecord{
-			ID:        r.ID,
-			Peer:      r.Peer,
-			Direction: r.Direction,
-			Filename:  r.Filename,
-			Size:      r.Size,
-			Mime:      r.Mime,
-			Path:      r.Path,
-			Status:    r.Status,
-			StartedAt: r.StartedAt.UTC().Format(time.RFC3339Nano),
+		out = append(out, flipRowToRecord(r))
+	}
+	return out, nil
+}
+
+func flipRowToRecord(r store.FlipRecord) FlipRecord {
+	rec := FlipRecord{
+		ID:        r.ID,
+		Peer:      r.Peer,
+		Direction: r.Direction,
+		Filename:  r.Filename,
+		Size:      r.Size,
+		Mime:      r.Mime,
+		Path:      r.Path,
+		Status:    r.Status,
+		StartedAt: r.StartedAt.UTC().Format(time.RFC3339Nano),
+	}
+	if !r.CompletedAt.IsZero() {
+		rec.CompletedAt = r.CompletedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if r.Status == store.FlipStatusComplete {
+		rec.CatchURL = "/catch/" + r.ID
+	}
+	return rec
+}
+
+// ListBoothFlips returns the flip history for a room: every flip exchanged
+// with any current member, de-duplicated by id (an outbound room flip is
+// stored once per recipient under one shared id).
+func (a *App) ListBoothFlips(boothID string) ([]FlipRecord, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("store not ready")
+	}
+	members, err := a.store.BoothMembers(a.ctx, boothID)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	out := []FlipRecord{}
+	for _, mem := range members {
+		if mem.PeerName == a.hostname {
+			continue
 		}
-		if !r.CompletedAt.IsZero() {
-			rec.CompletedAt = r.CompletedAt.UTC().Format(time.RFC3339Nano)
+		rows, err := a.store.FlipsByPeer(a.ctx, mem.PeerName)
+		if err != nil {
+			continue
 		}
-		if r.Status == store.FlipStatusComplete {
-			rec.CatchURL = "/catch/" + r.ID
+		for _, r := range rows {
+			if seen[r.ID] {
+				continue
+			}
+			seen[r.ID] = true
+			out = append(out, flipRowToRecord(r))
 		}
-		out = append(out, rec)
 	}
 	return out, nil
 }
