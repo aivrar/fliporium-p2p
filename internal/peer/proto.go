@@ -238,7 +238,13 @@ func WriteFrame(w io.Writer, t MessageType, body any) error {
 		}
 		bodyJSON = b
 	}
-	payload, err := json.Marshal(Envelope{Type: t, Body: bodyJSON})
+	return writeEnvelope(w, Envelope{Type: t, Body: bodyJSON})
+}
+
+// writeEnvelope length-prefixes and writes a pre-built envelope (used by the
+// encrypted write path, which seals the body before wrapping it).
+func writeEnvelope(w io.Writer, env Envelope) error {
+	payload, err := json.Marshal(env)
 	if err != nil {
 		return fmt.Errorf("marshal envelope: %w", err)
 	}

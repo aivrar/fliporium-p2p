@@ -39,7 +39,7 @@ func (h *Hub) AttachDataChannel(rwc io.ReadWriteCloser, selfName string) (string
 		rwc.Close()
 		return "", fmt.Errorf("decode HELLO: %w", err)
 	}
-	pc := &PeerConn{Name: remote.Name, Addr: "webrtc", Version: remote.Version, conn: rwc}
+	pc := &PeerConn{Name: remote.Name, Addr: "webrtc", Version: remote.Version, conn: rwc, key: h.currentKey()}
 	h.add(pc)
 	h.emit(HubEvent{Kind: EventConnect, Peer: pc.Name, Text: "webrtc peer"})
 	go h.runLoop(pc)

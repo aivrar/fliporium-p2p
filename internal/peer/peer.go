@@ -67,6 +67,7 @@ type PeerConn struct {
 	Addr    string // remote net address for logging
 	Version string // remote protocol version
 	conn    io.ReadWriteCloser
+	key     *[32]byte // room key; nil = no encryption (e.g. plaintext HELLO bootstrap)
 	mu      sync.Mutex // serializes writes
 	closeMu sync.Mutex
 	closed  bool
@@ -75,7 +76,18 @@ type PeerConn struct {
 func (c *PeerConn) WriteFrame(t MessageType, body any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return WriteFrame(c.conn, t, body)
+	if c.key == nil {
+		return WriteFrame(c.conn, t, body)
+	}
+	plain, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal body: %w", err)
+	}
+	sealed, err := sealBody(c.key, plain)
+	if err != nil {
+		return fmt.Errorf("seal body: %w", err)
+	}
+	return writeEnvelope(c.conn, Envelope{Type: t, Body: sealed})
 }
 
 func (c *PeerConn) Close() {
@@ -158,9 +170,27 @@ type Hub struct {
 	// inbound flip can succeed; if empty, inbound flips are rejected.
 	CatchRoot string
 
+	keyMu   sync.Mutex
+	roomKey *[32]byte // current room's E2E key; new PeerConns inherit it
+
 	flipMu   sync.Mutex
 	inFlips  map[string]*incomingFlip
 	outFlips map[string]*outgoingFlip
+}
+
+// SetRoomKey sets the E2E key applied to peers that connect from now on. Pass
+// nil to disable encryption (e.g. when leaving a room). Existing connections
+// keep whatever key they were created with.
+func (h *Hub) SetRoomKey(key *[32]byte) {
+	h.keyMu.Lock()
+	h.roomKey = key
+	h.keyMu.Unlock()
+}
+
+func (h *Hub) currentKey() *[32]byte {
+	h.keyMu.Lock()
+	defer h.keyMu.Unlock()
+	return h.roomKey
 }
 
 func NewHub() *Hub {
@@ -381,10 +411,20 @@ func (h *Hub) runLoop(c *PeerConn) {
 			}
 			return
 		}
+		// Decrypt the body for everything except the cleartext HELLO bootstrap.
+		body := env.Body
+		if c.key != nil && env.Type != TypeHello {
+			plain, derr := openBody(c.key, env.Body)
+			if derr != nil {
+				h.emit(HubEvent{Kind: EventInfo, Peer: c.Name, Text: "decrypt: " + derr.Error()})
+				continue
+			}
+			body = plain
+		}
 		switch env.Type {
 		case TypeMessage:
 			var m Message
-			if err := json.Unmarshal(env.Body, &m); err != nil {
+			if err := json.Unmarshal(body, &m); err != nil {
 				continue
 			}
 			h.emit(HubEvent{
@@ -393,7 +433,7 @@ func (h *Hub) runLoop(c *PeerConn) {
 			})
 		case TypeBye:
 			var b Bye
-			_ = json.Unmarshal(env.Body, &b)
+			_ = json.Unmarshal(body, &b)
 			reason := b.Reason
 			if reason == "" {
 				reason = "(no reason)"
@@ -404,77 +444,77 @@ func (h *Hub) runLoop(c *PeerConn) {
 			// extra HELLO post-handshake — ignore
 		case TypeFlipStart:
 			var s FlipStart
-			if err := json.Unmarshal(env.Body, &s); err == nil {
+			if err := json.Unmarshal(body, &s); err == nil {
 				h.handleFlipStart(c.Name, s)
 			}
 		case TypeFlipChunk:
 			var ch FlipChunk
-			if err := json.Unmarshal(env.Body, &ch); err == nil {
+			if err := json.Unmarshal(body, &ch); err == nil {
 				h.handleFlipChunk(c.Name, ch)
 			}
 		case TypeFlipEnd:
 			var e FlipEnd
-			if err := json.Unmarshal(env.Body, &e); err == nil {
+			if err := json.Unmarshal(body, &e); err == nil {
 				h.handleFlipEnd(c.Name, e)
 			}
 		case TypeFlipReject:
 			var r FlipReject
-			if err := json.Unmarshal(env.Body, &r); err == nil {
+			if err := json.Unmarshal(body, &r); err == nil {
 				h.handleFlipReject(c.Name, r)
 			}
 		case TypeBoothInvite:
 			var inv BoothInvite
-			if err := json.Unmarshal(env.Body, &inv); err == nil {
+			if err := json.Unmarshal(body, &inv); err == nil {
 				h.emit(HubEvent{Kind: EventBoothInvited, Peer: c.Name, Text: inv.Name, Data: &inv})
 			}
 		case TypeShowtimeStart:
 			var s ShowtimeStart
-			if err := json.Unmarshal(env.Body, &s); err == nil {
+			if err := json.Unmarshal(body, &s); err == nil {
 				h.emit(HubEvent{Kind: EventShowtimeStarted, Peer: c.Name, Text: s.FlipID, Data: &s})
 			}
 		case TypeShowtimeState:
 			var s ShowtimeState
-			if err := json.Unmarshal(env.Body, &s); err == nil {
+			if err := json.Unmarshal(body, &s); err == nil {
 				h.emit(HubEvent{Kind: EventShowtimeState, Peer: c.Name, Data: &s})
 			}
 		case TypeShowtimeEnd:
 			var s ShowtimeEnd
-			if err := json.Unmarshal(env.Body, &s); err == nil {
+			if err := json.Unmarshal(body, &s); err == nil {
 				h.emit(HubEvent{Kind: EventShowtimeEnded, Peer: c.Name, Data: &s})
 			}
 		case TypeNotepadUpdate:
 			var n NotepadUpdate
-			if err := json.Unmarshal(env.Body, &n); err == nil {
+			if err := json.Unmarshal(body, &n); err == nil {
 				h.emit(HubEvent{Kind: EventNotepadUpdated, Peer: c.Name, Data: &n})
 			}
 		case TypeTwinSyncMessage:
 			var t TwinSyncMessage
-			if err := json.Unmarshal(env.Body, &t); err == nil {
+			if err := json.Unmarshal(body, &t); err == nil {
 				h.emit(HubEvent{Kind: EventTwinSyncedMessage, Peer: c.Name, Data: &t})
 			}
 		case TypeMessageReaction:
 			var r MessageReaction
-			if err := json.Unmarshal(env.Body, &r); err == nil {
+			if err := json.Unmarshal(body, &r); err == nil {
 				h.emit(HubEvent{Kind: EventMessageReaction, Peer: c.Name, Data: &r})
 			}
 		case TypeMessageEdit:
 			var e MessageEdit
-			if err := json.Unmarshal(env.Body, &e); err == nil {
+			if err := json.Unmarshal(body, &e); err == nil {
 				h.emit(HubEvent{Kind: EventMessageEdit, Peer: c.Name, Data: &e})
 			}
 		case TypeMessageDelete:
 			var d MessageDelete
-			if err := json.Unmarshal(env.Body, &d); err == nil {
+			if err := json.Unmarshal(body, &d); err == nil {
 				h.emit(HubEvent{Kind: EventMessageDelete, Peer: c.Name, Data: &d})
 			}
 		case TypeMessagePin:
 			var p MessagePin
-			if err := json.Unmarshal(env.Body, &p); err == nil {
+			if err := json.Unmarshal(body, &p); err == nil {
 				h.emit(HubEvent{Kind: EventMessagePin, Peer: c.Name, Data: &p})
 			}
 		case TypePeerStatus:
 			var s PeerStatus
-			if err := json.Unmarshal(env.Body, &s); err == nil {
+			if err := json.Unmarshal(body, &s); err == nil {
 				h.emit(HubEvent{Kind: EventPeerStatus, Peer: c.Name, Text: s.Status, Data: &s})
 			}
 		}

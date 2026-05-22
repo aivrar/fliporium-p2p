@@ -111,6 +111,73 @@ func TestWebRTCHubParity(t *testing.T) {
 	}
 }
 
+// TestWebRTCEncryptedRoom proves messages round-trip when both peers share a
+// room key, and that with the key set the data still flows (E2E layer on).
+func TestWebRTCEncryptedRoom(t *testing.T) {
+	srv := httptest.NewServer(rtc.NewServer().Handler())
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var key [32]byte
+	copy(key[:], []byte("a-shared-room-key-32-bytes-long!"))
+
+	ha := NewHub()
+	hb := NewHub()
+	ha.SetRoomKey(&key)
+	hb.SetRoomKey(&key)
+	go func() { _ = ha.RunWebRTC(ctx, wsURL, "enc", "alice", nil) }()
+	go func() { _ = hb.RunWebRTC(ctx, wsURL, "enc", "bob", nil) }()
+
+	waitEvent(t, ha, EventConnect, 20*time.Second)
+	waitEvent(t, hb, EventConnect, 20*time.Second)
+
+	if err := ha.Send("bob", "secret hello"); err != nil {
+		t.Fatalf("alice send: %v", err)
+	}
+	ev := waitEvent(t, hb, EventMessage, 10*time.Second)
+	if ev.Text != "secret hello" {
+		t.Fatalf("bob got %q, want %q", ev.Text, "secret hello")
+	}
+}
+
+// TestWebRTCKeyMismatch proves a peer with the wrong room key cannot read
+// messages — they fail to decrypt rather than arriving as plaintext.
+func TestWebRTCKeyMismatch(t *testing.T) {
+	srv := httptest.NewServer(rtc.NewServer().Handler())
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var k1, k2 [32]byte
+	copy(k1[:], []byte("room-key-number-one-padding-32!!"))
+	copy(k2[:], []byte("room-key-number-two-padding-32!!"))
+
+	ha := NewHub()
+	hb := NewHub()
+	ha.SetRoomKey(&k1)
+	hb.SetRoomKey(&k2) // different key
+	go func() { _ = ha.RunWebRTC(ctx, wsURL, "mismatch", "alice", nil) }()
+	go func() { _ = hb.RunWebRTC(ctx, wsURL, "mismatch", "bob", nil) }()
+
+	waitEvent(t, ha, EventConnect, 20*time.Second)
+	waitEvent(t, hb, EventConnect, 20*time.Second)
+
+	if err := ha.Send("bob", "you can't read this"); err != nil {
+		t.Fatalf("alice send: %v", err)
+	}
+	// bob can't decrypt → surfaces an info event mentioning decrypt, never a
+	// clean EventMessage.
+	ev := waitEvent(t, hb, EventInfo, 10*time.Second)
+	if !strings.Contains(ev.Text, "decrypt") {
+		t.Fatalf("expected a decrypt failure, got info %q", ev.Text)
+	}
+}
+
 // TestWebRTCRoomIsolation proves peers only mesh-connect within their own
 // signaling room — the basis for invite-link rooms being separate spaces.
 func TestWebRTCRoomIsolation(t *testing.T) {

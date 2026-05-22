@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	cryptoRand "crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
@@ -327,6 +328,17 @@ func (a *App) switchRoom(roomID string) error {
 		a.room = nil
 		a.hub.CloseAllPeers()
 	}
+	// Set the room's end-to-end key (derived from the invite-link secret) before
+	// connecting, so peers that join inherit it. No secret -> no encryption.
+	if secret, _ := a.store.GetSetting(a.ctx, roomSecretKey(roomID)); secret != "" {
+		if k, err := secretToKey(secret); err == nil {
+			a.hub.SetRoomKey(k)
+		} else {
+			a.hub.SetRoomKey(nil)
+		}
+	} else {
+		a.hub.SetRoomKey(nil)
+	}
 	r, err := a.hub.JoinRoom(a.ctx, a.signalURL, roomID, a.hostname, a.stun)
 	if err != nil {
 		return err
@@ -336,6 +348,28 @@ func (a *App) switchRoom(roomID string) error {
 	_ = a.store.SetSetting(a.ctx, settingCurrentRoom, roomID)
 	wailsruntime.EventsEmit(a.ctx, "room-changed", roomID)
 	return nil
+}
+
+func roomSecretKey(roomID string) string { return "roomsecret:" + roomID }
+
+// newRoomSecret returns 32 fresh random bytes, base64url-encoded for the link.
+func newRoomSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := cryptoRand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// secretToKey decodes a room secret into a 32-byte symmetric key.
+func secretToKey(secret string) (*[32]byte, error) {
+	b, err := base64.RawURLEncoding.DecodeString(secret)
+	if err != nil || len(b) != 32 {
+		return nil, fmt.Errorf("invalid room secret")
+	}
+	var k [32]byte
+	copy(k[:], b)
+	return &k, nil
 }
 
 // CreateRoom makes a new room (a booth joined over a fresh signaling room),
@@ -352,10 +386,15 @@ func (a *App) CreateRoom(name string) (RoomInfo, error) {
 	if err != nil {
 		return RoomInfo{}, err
 	}
+	secret, err := newRoomSecret()
+	if err != nil {
+		return RoomInfo{}, err
+	}
 	now := time.Now().UTC()
 	if err := a.store.UpsertBooth(a.ctx, store.Booth{ID: id, Name: name, Founder: a.hostname, FoundedAt: now}); err != nil {
 		return RoomInfo{}, err
 	}
+	_ = a.store.SetSetting(a.ctx, roomSecretKey(id), secret)
 	_ = a.store.AddBoothMember(a.ctx, id, a.hostname, now)
 	if err := a.switchRoom(id); err != nil {
 		return RoomInfo{}, err
@@ -364,7 +403,7 @@ func (a *App) CreateRoom(name string) (RoomInfo, error) {
 		ID: id, Name: name, Founder: a.hostname,
 		FoundedAt: now.Format(time.RFC3339Nano), Members: []string{a.hostname},
 	})
-	return RoomInfo{ID: id, Name: name, Link: roomLink(id, name)}, nil
+	return RoomInfo{ID: id, Name: name, Link: roomLink(id, name, secret)}, nil
 }
 
 // JoinRoomByLink parses an invite link, records the room locally, and switches
@@ -373,7 +412,7 @@ func (a *App) JoinRoomByLink(link string) (RoomInfo, error) {
 	if a.store == nil || a.hub == nil {
 		return RoomInfo{}, fmt.Errorf("app not ready")
 	}
-	id, name := parseRoomLink(link)
+	id, name, secret := parseRoomLink(link)
 	if id == "" {
 		return RoomInfo{}, fmt.Errorf("that doesn't look like a valid invite link")
 	}
@@ -388,6 +427,9 @@ func (a *App) JoinRoomByLink(link string) (RoomInfo, error) {
 	if err := a.store.UpsertBooth(a.ctx, store.Booth{ID: id, Name: name, FoundedAt: now}); err != nil {
 		return RoomInfo{}, err
 	}
+	if secret != "" {
+		_ = a.store.SetSetting(a.ctx, roomSecretKey(id), secret)
+	}
 	_ = a.store.AddBoothMember(a.ctx, id, a.hostname, now)
 	if err := a.switchRoom(id); err != nil {
 		return RoomInfo{}, err
@@ -395,7 +437,7 @@ func (a *App) JoinRoomByLink(link string) (RoomInfo, error) {
 	wailsruntime.EventsEmit(a.ctx, "booth", BoothRecord{
 		ID: id, Name: name, FoundedAt: now.Format(time.RFC3339Nano), Members: []string{a.hostname},
 	})
-	return RoomInfo{ID: id, Name: name, Link: roomLink(id, name)}, nil
+	return RoomInfo{ID: id, Name: name, Link: roomLink(id, name, secret)}, nil
 }
 
 // SwitchRoom re-enters a room the user already knows about (by booth id).
@@ -422,24 +464,30 @@ func (a *App) RoomLinkFor(roomID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return roomLink(b.ID, b.Name), nil
+	secret, _ := a.store.GetSetting(a.ctx, roomSecretKey(roomID))
+	return roomLink(b.ID, b.Name, secret), nil
 }
 
-// roomLink builds the shareable invite URL. The room id + name live in the URL
-// fragment (after #), which browsers never send to the server.
-func roomLink(id, name string) string {
+// roomLink builds the shareable invite URL. The room id, name, and the E2E
+// secret all live in the URL fragment (after #), which browsers never send to
+// the server — so the signaling server can match-make by id but can't read
+// any room's traffic.
+func roomLink(id, name, secret string) string {
 	v := url.Values{}
 	v.Set("r", id)
+	if secret != "" {
+		v.Set("k", secret)
+	}
 	if name != "" {
 		v.Set("n", name)
 	}
 	return "https://fliporium.com/join#" + v.Encode()
 }
 
-// parseRoomLink extracts the room id and name from an invite link. Accepts the
-// full https://fliporium.com/join#r=...&n=... URL, a bare "r=...&n=..."
-// fragment, or a bare room id.
-func parseRoomLink(link string) (id, name string) {
+// parseRoomLink extracts the room id, name, and E2E secret from an invite
+// link. Accepts the full https://fliporium.com/join#r=...&k=...&n=... URL, a
+// bare fragment, or a bare room id.
+func parseRoomLink(link string) (id, name, secret string) {
 	link = strings.TrimSpace(link)
 	frag := link
 	if i := strings.LastIndex(link, "#"); i >= 0 {
@@ -447,13 +495,13 @@ func parseRoomLink(link string) (id, name string) {
 	}
 	if v, err := url.ParseQuery(frag); err == nil {
 		if r := v.Get("r"); r != "" {
-			return r, v.Get("n")
+			return r, v.Get("n"), v.Get("k")
 		}
 	}
 	if link != "" && !strings.ContainsAny(link, "/ #") {
-		return link, "" // bare id
+		return link, "", "" // bare id
 	}
-	return "", ""
+	return "", "", ""
 }
 
 // eventPump bridges peer.Hub events to (a) the SQLite store and
