@@ -33,7 +33,7 @@ func main() {
 	peers, _ := s.Peers(ctx)
 	fmt.Printf("== peers (%d) ==\n", len(peers))
 	for _, p := range peers {
-		fmt.Printf("  %-20s first=%s  last=%s\n", p.Name, p.FirstSeen.Format("15:04:05Z"), p.LastSeen.Format("15:04:05Z"))
+		fmt.Printf("  %-20s display=%q first=%s  last=%s\n", p.Name, p.Display, p.FirstSeen.Format("15:04:05Z"), p.LastSeen.Format("15:04:05Z"))
 	}
 
 	// Twin setting

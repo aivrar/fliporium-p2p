@@ -58,6 +58,7 @@ type Reaction struct {
 // PeerRecord is what we remember about a peer between sessions.
 type PeerRecord struct {
 	Name      string
+	Display   string // friendly name announced via HELLO ("" if unknown)
 	FirstSeen time.Time
 	LastSeen  time.Time
 }
@@ -253,6 +254,7 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE messages ADD COLUMN edited_at TEXT`,       // v0.10
 		`ALTER TABLE messages ADD COLUMN deleted_at TEXT`,      // v0.10
 		`ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`, // v0.10
+		`ALTER TABLE peers ADD COLUMN display TEXT`,                         // v0.12 friendly names
 	}
 	for _, stmt := range alters {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -282,10 +284,24 @@ func (s *Store) UpsertPeer(ctx context.Context, name string) error {
 	return err
 }
 
+// SetPeerDisplay records a peer's friendly display name (no-op if display is
+// empty, so we never clobber a known name with a blank one).
+func (s *Store) SetPeerDisplay(ctx context.Context, name, display string) error {
+	if display == "" {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO peers (name, first_seen, last_seen, display) VALUES (?, ?, ?, ?)
+		ON CONFLICT(name) DO UPDATE SET display = excluded.display, last_seen = excluded.last_seen
+	`, name, now, now, display)
+	return err
+}
+
 // Peers returns the known peer roster, most-recently-seen first.
 func (s *Store) Peers(ctx context.Context) ([]PeerRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT name, first_seen, last_seen FROM peers ORDER BY last_seen DESC
+		SELECT name, COALESCE(display, ''), first_seen, last_seen FROM peers ORDER BY last_seen DESC
 	`)
 	if err != nil {
 		return nil, err
@@ -295,7 +311,7 @@ func (s *Store) Peers(ctx context.Context) ([]PeerRecord, error) {
 	for rows.Next() {
 		var p PeerRecord
 		var first, last string
-		if err := rows.Scan(&p.Name, &first, &last); err != nil {
+		if err := rows.Scan(&p.Name, &p.Display, &first, &last); err != nil {
 			return nil, err
 		}
 		p.FirstSeen, _ = time.Parse(time.RFC3339Nano, first)
@@ -303,6 +319,21 @@ func (s *Store) Peers(ctx context.Context) ([]PeerRecord, error) {
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// PeerDisplays returns a name->display map for resolving friendly names.
+func (s *Store) PeerDisplays(ctx context.Context) (map[string]string, error) {
+	peers, err := s.Peers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, len(peers))
+	for _, p := range peers {
+		if p.Display != "" {
+			m[p.Name] = p.Display
+		}
+	}
+	return m, nil
 }
 
 // AppendMessage stores a single 1:1 chat line. boothID + UUID + parentUUID

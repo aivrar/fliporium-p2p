@@ -116,7 +116,7 @@ function renderFloor() {
 
             const name = document.createElement("span");
             name.className = "name";
-            name.textContent = p.name;
+            name.textContent = p.displayName || p.name;
             li.appendChild(name);
 
             const meta = document.createElement("span");
@@ -234,7 +234,7 @@ function renderMessage(m, container) {
         const meta = document.createElement("div");
         meta.className = "meta";
         const editedTag = m.editedAt && !m.deletedAt ? ` <span class="edited-tag">(edited)</span>` : "";
-        meta.innerHTML = (m.direction === "out" ? "me" : escapeAttr(m.peer)) + " - " + escapeAttr(shortTime(m.at)) + editedTag;
+        meta.innerHTML = (m.direction === "out" ? "me" : escapeAttr(m.displayName || m.peer)) + " - " + escapeAttr(shortTime(m.at)) + editedTag;
         li.appendChild(meta);
     }
 
@@ -308,7 +308,7 @@ function renderPinnedBanner() {
         row.innerHTML = `
             <span class="icon">📌</span>
             <span class="preview">${escapeAttr(preview)}</span>
-            <span class="from">${escapeAttr(m.direction === "out" ? "me" : m.peer)}</span>
+            <span class="from">${escapeAttr(m.direction === "out" ? "me" : (m.displayName || m.peer))}</span>
         `;
         row.addEventListener("click", () => jumpToMessage(m.uuid));
         banner.appendChild(row);
@@ -539,7 +539,7 @@ function renderChat() {
 function renderChatPeer(name, list) {
     $("notepad-panel").classList.add("hidden");
     const peer = state.peers.find(p => p.name === name);
-    $("chat-title").textContent = peer ? peer.name : name;
+    $("chat-title").textContent = peer ? (peer.displayName || peer.name) : name;
     $("chat-state").textContent = peer && peer.connected
         ? "live"
         : peer && peer.tailnetOnline
@@ -860,15 +860,35 @@ function upsertBooth(b) {
 // ---------- top bar / self ----------
 
 function renderSelf() {
+    const el = $("selfName");
     if (!state.self) {
-        $("selfName").textContent = "starting...";
+        el.textContent = "starting...";
         $("selfDot").className = "dot offline";
         $("selfIp").textContent = "";
         return;
     }
-    $("selfName").textContent = state.self.hostname || "-";
+    el.textContent = state.self.displayName || state.self.hostname || "-";
+    el.title = "click to change your name";
+    el.style.cursor = "pointer";
+    el.onclick = editDisplayName;
     $("selfDot").className = "dot " + (state.self.online ? "connected" : "offline");
-    $("selfIp").textContent = (state.self.ips && state.self.ips[0]) ? "- " + state.self.ips[0] : "";
+    $("selfIp").textContent = "";
+}
+
+async function editDisplayName() {
+    const current = (state.self && state.self.displayName) || "";
+    const next = prompt("Your name (what friends see):", current);
+    if (next === null) return;
+    const name = next.trim();
+    if (!name || name === current) return;
+    try {
+        await window.go.main.App.SetDisplayName(name);
+        if (state.self) state.self.displayName = name;
+        renderSelf();
+        toast("name updated to " + name);
+    } catch (e) {
+        toast("couldn't set name: " + e);
+    }
 }
 
 let currentTwin = null;

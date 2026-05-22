@@ -63,7 +63,8 @@ func NewTLSConfig(hostname string) (*tls.Config, error) {
 // or a detached WebRTC DataChannel — runLoop/WriteFrame/Close only need
 // Read/Write/Close, so the same machinery serves both.
 type PeerConn struct {
-	Name    string // remote's announced display name
+	Name    string // remote's stable routing id (the HELLO Name)
+	Display string // remote's friendly display name (the HELLO DisplayName)
 	Addr    string // remote net address for logging
 	Version string // remote protocol version
 	conn    io.ReadWriteCloser
@@ -153,11 +154,12 @@ type FlipEventData struct {
 
 // HubEvent is a single async event to surface to the UI.
 type HubEvent struct {
-	Kind HubEventKind
-	Peer string
-	Text string
-	Data any // typed payload (e.g. *FlipEventData)
-	At   time.Time
+	Kind    HubEventKind
+	Peer    string
+	Display string // friendly name of Peer ("" if unknown)
+	Text    string
+	Data    any // typed payload (e.g. *FlipEventData)
+	At      time.Time
 }
 
 // Hub owns all live peer connections and a single events channel for the UI.
@@ -171,12 +173,27 @@ type Hub struct {
 	// inbound flip can succeed; if empty, inbound flips are rejected.
 	CatchRoot string
 
-	keyMu   sync.Mutex
-	roomKey *[32]byte // current room's E2E key; new PeerConns inherit it
+	keyMu       sync.Mutex
+	roomKey     *[32]byte // current room's E2E key; new PeerConns inherit it
+	selfDisplay string    // our own friendly name, announced in HELLO
 
 	flipMu   sync.Mutex
 	inFlips  map[string]*incomingFlip
 	outFlips map[string]*outgoingFlip
+}
+
+// SetSelfDisplay sets the friendly name announced to peers in the HELLO
+// handshake. Set it before connecting; reconnecting peers pick up changes.
+func (h *Hub) SetSelfDisplay(name string) {
+	h.keyMu.Lock()
+	h.selfDisplay = name
+	h.keyMu.Unlock()
+}
+
+func (h *Hub) selfDisp() string {
+	h.keyMu.Lock()
+	defer h.keyMu.Unlock()
+	return h.selfDisplay
 }
 
 // SetRoomKey sets the E2E key applied to peers that connect from now on. Pass
@@ -429,7 +446,7 @@ func (h *Hub) runLoop(c *PeerConn) {
 				continue
 			}
 			h.emit(HubEvent{
-				Kind: EventMessage, Peer: c.Name, Text: m.Text,
+				Kind: EventMessage, Peer: c.Name, Display: c.Display, Text: m.Text,
 				Data: &MessageEventData{BoothID: m.BoothID, UUID: m.UUID, ParentUUID: m.ParentUUID},
 			})
 		case TypeBye:

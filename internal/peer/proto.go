@@ -61,8 +61,9 @@ type Envelope struct {
 }
 
 type Hello struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	DisplayName string `json:"displayName,omitempty"` // friendly label; routing still keys on Name
 }
 
 type Message struct {

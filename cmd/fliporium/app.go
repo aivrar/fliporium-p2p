@@ -50,6 +50,7 @@ type SelfInfo struct {
 // PeerInfo summarises a peer for the Floor list.
 type PeerInfo struct {
 	Name          string `json:"name"`
+	DisplayName   string `json:"displayName,omitempty"`
 	TailnetName   string `json:"tailnetName"`
 	IPs           []string `json:"ips"`
 	TailnetOnline bool   `json:"tailnetOnline"`
@@ -59,9 +60,10 @@ type PeerInfo struct {
 
 // MessageRecord is one persisted chat line as the frontend sees it.
 type MessageRecord struct {
-	ID         int64              `json:"id"`
-	UUID       string             `json:"uuid,omitempty"`
-	Peer       string             `json:"peer"`
+	ID          int64             `json:"id"`
+	UUID        string             `json:"uuid,omitempty"`
+	Peer        string             `json:"peer"`
+	DisplayName string             `json:"displayName,omitempty"`
 	Direction  string             `json:"direction"`
 	Text       string             `json:"text"`
 	At         string             `json:"at"`
@@ -73,11 +75,18 @@ type MessageRecord struct {
 	Reactions  map[string][]string `json:"reactions,omitempty"` // emoji -> peer-names
 }
 
-func toMessageRecord(m store.Message) MessageRecord {
+func (a *App) toMessageRecord(m store.Message, displays map[string]string) MessageRecord {
+	// DisplayName is the SENDER's friendly name. Outgoing lines are ours;
+	// incoming lines are from m.Peer (the sender, for both 1:1 and rooms).
+	sender := a.displayFor(m.Peer, displays)
+	if m.Direction == store.DirectionOut {
+		sender = a.displayName()
+	}
 	r := MessageRecord{
-		ID:         m.ID,
-		UUID:       m.UUID,
-		Peer:       m.Peer,
+		ID:          m.ID,
+		UUID:        m.UUID,
+		Peer:        m.Peer,
+		DisplayName: sender,
 		Direction:  m.Direction,
 		Text:       m.Text,
 		At:         m.At.UTC().Format(time.RFC3339Nano),
@@ -92,6 +101,30 @@ func toMessageRecord(m store.Message) MessageRecord {
 		r.DeletedAt = m.DeletedAt.UTC().Format(time.RFC3339Nano)
 	}
 	return r
+}
+
+// displayFor resolves a routing id to a friendly name: our own name for
+// ourselves, the roster's known name otherwise, and "" if unknown (the
+// frontend then falls back to showing the id).
+func (a *App) displayFor(peerID string, displays map[string]string) string {
+	if peerID == a.hostname {
+		return a.displayName()
+	}
+	if displays != nil {
+		if d := displays[peerID]; d != "" {
+			return d
+		}
+	}
+	return ""
+}
+
+// displayResolve is the event-path variant: it prefers an explicit name hint
+// carried on the event (the live or backlog sender's announced name).
+func (a *App) displayResolve(peerID, hint string) string {
+	if peerID == a.hostname {
+		return a.displayName()
+	}
+	return hint
 }
 
 func collectUUIDs(msgs []store.Message) []string {
@@ -302,6 +335,7 @@ func (a *App) initWebRTC(signalURL string) {
 
 	a.hub = peer.NewHub()
 	a.hub.CatchRoot = filepath.Join(a.dataDir, "catch")
+	a.hub.SetSelfDisplay(a.displayName())
 	go a.eventPump()
 	a.setState(StateReady, "")
 
@@ -526,6 +560,7 @@ func (a *App) eventPump() {
 		switch ev.Kind {
 		case peer.EventConnect:
 			_ = a.store.UpsertPeer(a.ctx, ev.Peer)
+			_ = a.store.SetPeerDisplay(a.ctx, ev.Peer, ev.Display)
 			// In a room, a connecting peer becomes a member so message/flip
 			// fan-out reaches them.
 			a.roomMu.Lock()
@@ -566,15 +601,19 @@ func (a *App) eventPump() {
 				}
 			}
 			// Backlog messages we sent ourselves shouldn't reappear as inbound.
-			if backlog && ev.Peer == a.displayName() {
+			if backlog && ev.Peer == a.hostname {
 				continue
 			}
+			// Learn the sender's friendly name (covers backlog senders we never
+			// got a connect event from).
+			_ = a.store.SetPeerDisplay(a.ctx, ev.Peer, ev.Display)
 			_ = a.store.AppendMessageFull(a.ctx, store.Message{
 				UUID: uuid, Peer: ev.Peer, Direction: store.DirectionIn, Text: ev.Text, At: at, BoothID: boothID, ParentUUID: parentUUID,
 			})
 			wailsruntime.EventsEmit(a.ctx, "message", MessageRecord{
-				UUID:       uuid,
-				Peer:       ev.Peer,
+				UUID:        uuid,
+				Peer:        ev.Peer,
+				DisplayName: a.displayResolve(ev.Peer, ev.Display),
 				Direction:  store.DirectionIn,
 				Text:       ev.Text,
 				At:         at.UTC().Format(time.RFC3339Nano),
@@ -783,8 +822,10 @@ func (a *App) eventPump() {
 				continue
 			}
 			_ = a.store.AppendMessageBooth(a.ctx, ts.OriginalPeer, ts.Direction, ts.Text, ts.BoothID, ts.At)
+			twinDisplays, _ := a.store.PeerDisplays(a.ctx)
 			wailsruntime.EventsEmit(a.ctx, "message", MessageRecord{
-				Peer:      ts.OriginalPeer,
+				Peer:        ts.OriginalPeer,
+				DisplayName: a.displayFor(ts.OriginalPeer, twinDisplays),
 				Direction: ts.Direction,
 				Text:      ts.Text,
 				At:        ts.At.UTC().Format(time.RFC3339Nano),
@@ -849,14 +890,22 @@ func (a *App) Status() AppStatus {
 	return AppStatus{State: a.state, Message: a.stateMsg, Self: a.self}
 }
 
-// displayName returns the user-chosen label, defaulting to the hostname.
+// displayName returns the user-chosen label, defaulting to the OS username so
+// peers see something readable without any setup (the routing id is an ugly
+// fingerprint and shouldn't be shown).
 func (a *App) displayName() string {
 	if a.store != nil {
 		if dn, _ := a.store.GetSetting(a.ctx, store.SettingDisplayName); dn != "" {
 			return dn
 		}
 	}
-	return a.hostname
+	if u := strings.TrimSpace(os.Getenv("USERNAME")); u != "" {
+		return u
+	}
+	if u := strings.TrimSpace(os.Getenv("USER")); u != "" {
+		return u
+	}
+	return "guest"
 }
 
 // SetDisplayName updates the user-chosen label (separate from the device's
@@ -871,6 +920,9 @@ func (a *App) SetDisplayName(name string) error {
 	}
 	if err := a.store.SetSetting(a.ctx, store.SettingDisplayName, name); err != nil {
 		return err
+	}
+	if a.hub != nil {
+		a.hub.SetSelfDisplay(name) // peers pick it up on their next (re)connect
 	}
 	a.mu.Lock()
 	a.self.DisplayName = name
@@ -904,10 +956,14 @@ func (a *App) ListPeers() ([]PeerInfo, error) {
 			}
 			if existing, ok := byName[r.Name]; ok {
 				existing.LastSeen = r.LastSeen.UTC().Format(time.RFC3339Nano)
+				if existing.DisplayName == "" {
+					existing.DisplayName = r.Display
+				}
 			} else {
 				byName[r.Name] = &PeerInfo{
-					Name:     r.Name,
-					LastSeen: r.LastSeen.UTC().Format(time.RFC3339Nano),
+					Name:        r.Name,
+					DisplayName: r.Display,
+					LastSeen:    r.LastSeen.UTC().Format(time.RFC3339Nano),
 				}
 			}
 		}
@@ -947,9 +1003,10 @@ func (a *App) ListMessages(peerName string, limit int) ([]MessageRecord, error) 
 	if err != nil {
 		return nil, err
 	}
+	displays, _ := a.store.PeerDisplays(a.ctx)
 	out := make([]MessageRecord, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, toMessageRecord(m))
+		out = append(out, a.toMessageRecord(m, displays))
 	}
 	a.attachReactions(out, msgs)
 	return out, nil
@@ -988,7 +1045,7 @@ func (a *App) SendReply(peerName, text, parentUUID string) error {
 		log.Printf("append out message: %v", err)
 	}
 	wailsruntime.EventsEmit(a.ctx, "message", MessageRecord{
-		UUID: uuid, Peer: peerName, Direction: store.DirectionOut, Text: text,
+		UUID: uuid, Peer: peerName, DisplayName: a.displayName(), Direction: store.DirectionOut, Text: text,
 		At: now.Format(time.RFC3339Nano), ParentUUID: parentUUID,
 	})
 	a.relayToTwin(peer.TwinSyncMessage{
@@ -1264,9 +1321,10 @@ func (a *App) ListBoothMessages(boothID string, limit int) ([]MessageRecord, err
 	if err != nil {
 		return nil, err
 	}
+	displays, _ := a.store.PeerDisplays(a.ctx)
 	out := make([]MessageRecord, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, toMessageRecord(m))
+		out = append(out, a.toMessageRecord(m, displays))
 	}
 	a.attachReactions(out, msgs)
 	return out, nil
@@ -1314,13 +1372,14 @@ func (a *App) SendBoothMessage(boothID, text string) error {
 	isCurrent := boothID == a.currentRoomID
 	a.roomMu.Unlock()
 	if isCurrent && curRoom != nil {
-		if err := a.hub.StoreMessage(a.ctx, curRoom, a.displayName(), uuid, text, boothID, now); err != nil {
+		if err := a.hub.StoreMessage(a.ctx, curRoom, a.hostname, a.displayName(), uuid, text, boothID, now); err != nil {
 			log.Printf("backlog store: %v", err)
 		}
 	}
 	wailsruntime.EventsEmit(a.ctx, "message", MessageRecord{
-		UUID:      uuid,
-		Peer:      a.hostname,
+		UUID:        uuid,
+		Peer:        a.hostname,
+		DisplayName: a.displayName(),
 		Direction: store.DirectionOut,
 		Text:      text,
 		At:        now.Format(time.RFC3339Nano),

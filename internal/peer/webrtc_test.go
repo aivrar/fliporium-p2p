@@ -44,12 +44,17 @@ func TestWebRTCHubParity(t *testing.T) {
 	ha := NewHub()
 	hb := NewHub()
 	hb.CatchRoot = catchDir
+	ha.SetSelfDisplay("Alice")
+	hb.SetSelfDisplay("Bob")
 
 	go func() { _ = ha.RunWebRTC(ctx, wsURL, "room", "alice", nil) }()
 	go func() { _ = hb.RunWebRTC(ctx, wsURL, "room", "bob", nil) }()
 
 	// Both sides must see the peer-connect before we exercise anything.
-	waitEvent(t, ha, EventConnect, 20*time.Second)
+	connectEv := waitEvent(t, ha, EventConnect, 20*time.Second)
+	if connectEv.Display != "Bob" {
+		t.Fatalf("alice saw peer display %q, want Bob", connectEv.Display)
+	}
 	waitEvent(t, hb, EventConnect, 20*time.Second)
 
 	if ha.Get("bob") == nil {
@@ -198,7 +203,7 @@ func TestWebRTCBacklogMessage(t *testing.T) {
 		t.Fatalf("alice join: %v", err)
 	}
 	// Alice posts while she's alone; it goes only to the encrypted backlog.
-	if err := ha.StoreMessage(ctx, rA, "alice", "uuid-1", "offline hi", "bk", time.Now().UTC()); err != nil {
+	if err := ha.StoreMessage(ctx, rA, "alice", "Alice", "uuid-1", "offline hi", "bk", time.Now().UTC()); err != nil {
 		t.Fatalf("store: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond) // let the server persist it
@@ -212,6 +217,9 @@ func TestWebRTCBacklogMessage(t *testing.T) {
 	ev := waitEvent(t, hb, EventMessage, 10*time.Second)
 	if ev.Text != "offline hi" {
 		t.Fatalf("bob backlog got %q, want %q", ev.Text, "offline hi")
+	}
+	if ev.Display != "Alice" {
+		t.Fatalf("backlog display = %q, want %q", ev.Display, "Alice")
 	}
 	d, ok := ev.Data.(*MessageEventData)
 	if !ok || !d.Backlog || d.UUID != "uuid-1" {

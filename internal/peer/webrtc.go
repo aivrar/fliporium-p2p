@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"time"
 
 	"fliporium/internal/rtc"
@@ -22,7 +23,7 @@ import (
 // Both sides write HELLO then read it; DataChannel writes are buffered, so
 // there's no handshake deadlock.
 func (h *Hub) AttachDataChannel(rwc io.ReadWriteCloser, selfName string) (string, error) {
-	if err := WriteFrame(rwc, TypeHello, Hello{Name: selfName, Version: ProtocolVersion}); err != nil {
+	if err := WriteFrame(rwc, TypeHello, Hello{Name: selfName, Version: ProtocolVersion, DisplayName: h.selfDisp()}); err != nil {
 		rwc.Close()
 		return "", fmt.Errorf("send HELLO: %w", err)
 	}
@@ -40,9 +41,9 @@ func (h *Hub) AttachDataChannel(rwc io.ReadWriteCloser, selfName string) (string
 		rwc.Close()
 		return "", fmt.Errorf("decode HELLO: %w", err)
 	}
-	pc := &PeerConn{Name: remote.Name, Addr: "webrtc", Version: remote.Version, conn: rwc, key: h.currentKey()}
+	pc := &PeerConn{Name: remote.Name, Display: remote.DisplayName, Addr: "webrtc", Version: remote.Version, conn: rwc, key: h.currentKey()}
 	h.add(pc)
-	h.emit(HubEvent{Kind: EventConnect, Peer: pc.Name, Text: "webrtc peer"})
+	h.emit(HubEvent{Kind: EventConnect, Peer: pc.Name, Display: pc.Display, Text: "webrtc peer"})
 	go h.runLoop(pc)
 	return remote.Name, nil
 }
@@ -58,8 +59,12 @@ func (h *Hub) JoinRoom(ctx context.Context, signalURL, roomID, selfName string, 
 		return nil, err
 	}
 	r.OnPeer = func(remoteID string, rwc io.ReadWriteCloser, initiator bool) {
-		if _, err := h.AttachDataChannel(rwc, selfName); err != nil {
+		log.Printf("hub: datachannel to %s open (initiator=%v); running HELLO", remoteID, initiator)
+		if name, err := h.AttachDataChannel(rwc, selfName); err != nil {
+			log.Printf("hub: attach %s failed: %v", remoteID, err)
 			h.emit(HubEvent{Kind: EventInfo, Text: "webrtc attach " + remoteID + ": " + err.Error()})
+		} else {
+			log.Printf("hub: attached peer %q", name)
 		}
 	}
 	r.OnPeerLeft = func(remoteID string) {
@@ -85,7 +90,7 @@ func (h *Hub) JoinRoom(ctx context.Context, signalURL, roomID, selfName string, 
 				continue
 			}
 			h.emit(HubEvent{
-				Kind: EventMessage, Peer: bm.Sender, Text: bm.Text, At: bm.At,
+				Kind: EventMessage, Peer: bm.Sender, Display: bm.Disp, Text: bm.Text, At: bm.At,
 				Data: &MessageEventData{BoothID: bm.BoothID, UUID: bm.UUID, Backlog: true},
 			})
 		}
@@ -97,7 +102,8 @@ func (h *Hub) JoinRoom(ctx context.Context, signalURL, roomID, selfName string, 
 // backlogMsg is the cleartext shape of an offline-backlog blob (sealed before
 // it leaves the device).
 type backlogMsg struct {
-	Sender  string    `json:"s"`
+	Sender  string    `json:"s"`           // sender's routing id
+	Disp    string    `json:"d,omitempty"` // sender's friendly name
 	UUID    string    `json:"u"`
 	Text    string    `json:"t"`
 	BoothID string    `json:"b"`
@@ -107,12 +113,12 @@ type backlogMsg struct {
 // StoreMessage seals a room message and appends it to the room's offline
 // backlog so members who join later receive it. No-op if the room isn't
 // encrypted (no key) — we never hand the relay plaintext.
-func (h *Hub) StoreMessage(ctx context.Context, r *rtc.Room, sender, uuid, text, boothID string, at time.Time) error {
+func (h *Hub) StoreMessage(ctx context.Context, r *rtc.Room, sender, display, uuid, text, boothID string, at time.Time) error {
 	key := h.currentKey()
 	if key == nil || r == nil {
 		return nil
 	}
-	plain, err := json.Marshal(backlogMsg{Sender: sender, UUID: uuid, Text: text, BoothID: boothID, At: at})
+	plain, err := json.Marshal(backlogMsg{Sender: sender, Disp: display, UUID: uuid, Text: text, BoothID: boothID, At: at})
 	if err != nil {
 		return err
 	}

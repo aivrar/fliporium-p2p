@@ -67,8 +67,10 @@ func Connect(ctx context.Context, send func(Sig) error, in <-chan Sig, self, rem
 
 	wireDC := func(dc *webrtc.DataChannel) {
 		dc.OnOpen(func() {
+			log.Printf("rtc: datachannel open %s <-> %s; detaching", self, remote)
 			raw, err := dc.Detach()
 			if err != nil {
+				log.Printf("rtc: detach %s <-> %s failed: %v", self, remote, err)
 				failed <- fmt.Errorf("detach data channel: %w", err)
 				return
 			}
