@@ -473,7 +473,7 @@ async function startShowtime(boothId, flipId) {
 window.startShowtime = startShowtime;
 
 function renderFlipPreview(f) {
-    if (f.status !== "complete" || f.direction !== "in" || !f.catchUrl) return "";
+    if (f.status !== "complete" || !f.catchUrl) return "";
     const mime = (f.mime || "").toLowerCase();
     const url = f.catchUrl;
     if (mime.startsWith("image/")) {

@@ -875,7 +875,10 @@ func (a *App) flipToRecord(peerName string, fd *peer.FlipEventData, status strin
 	if !completedAt.IsZero() {
 		rec.CompletedAt = completedAt.UTC().Format(time.RFC3339Nano)
 	}
-	if status == store.FlipStatusComplete && fd.Direction == store.DirectionIn {
+	// Both directions get a preview URL: inbound serves the caught file,
+	// outbound serves the sender's own original (local-only, so the sender
+	// also sees a thumbnail of what they sent).
+	if status == store.FlipStatusComplete {
 		rec.CatchURL = "/catch/" + fd.ID
 	}
 	return rec
@@ -1965,7 +1968,7 @@ func (a *App) ListFlips(peerName string) ([]FlipRecord, error) {
 		if !r.CompletedAt.IsZero() {
 			rec.CompletedAt = r.CompletedAt.UTC().Format(time.RFC3339Nano)
 		}
-		if r.Status == store.FlipStatusComplete && r.Direction == store.DirectionIn {
+		if r.Status == store.FlipStatusComplete {
 			rec.CatchURL = "/catch/" + r.ID
 		}
 		out = append(out, rec)
@@ -2011,10 +2014,9 @@ func (a *App) catchHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "flip not complete", http.StatusNotFound)
 		return
 	}
-	if f.Direction != store.DirectionIn {
-		http.Error(w, "not an inbound flip", http.StatusNotFound)
-		return
-	}
+	// Serves both inbound (caught files) and outbound (the sender's own
+	// originals). This endpoint is only reachable from this app's own webview,
+	// never the network, so showing the local user their own file is safe.
 	if f.Mime != "" {
 		w.Header().Set("Content-Type", f.Mime)
 	}

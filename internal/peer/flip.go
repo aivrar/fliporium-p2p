@@ -42,6 +42,7 @@ type outgoingFlip struct {
 	id       string
 	peer     string
 	filename string
+	mime     string
 	size     int64
 	path     string
 	cancel   chan struct{}
@@ -105,6 +106,7 @@ func (h *Hub) SendFlipWithID(peerName, localPath, id string) error {
 		id:       id,
 		peer:     peerName,
 		filename: base,
+		mime:     mimeType,
 		size:     info.Size(),
 		path:     localPath,
 		cancel:   make(chan struct{}),
@@ -146,7 +148,7 @@ func (h *Hub) runOutgoingFlip(c *PeerConn, f *os.File, out *outgoingFlip, start 
 		select {
 		case <-out.cancel:
 			h.emit(HubEvent{Kind: EventFlipFailed, Peer: c.Name, Text: "cancelled",
-				Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Size: out.size, Path: out.path, Bytes: offset, Reason: "cancelled"}})
+				Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Mime: out.mime, Size: out.size, Path: out.path, Bytes: offset, Reason: "cancelled"}})
 			return
 		default:
 		}
@@ -160,7 +162,7 @@ func (h *Hub) runOutgoingFlip(c *PeerConn, f *os.File, out *outgoingFlip, start 
 			hasher.Write(buf[:n])
 			offset += int64(n)
 			h.emit(HubEvent{Kind: EventFlipProgress, Peer: c.Name, Text: out.filename,
-				Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Size: out.size, Path: out.path, Bytes: offset}})
+				Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Mime: out.mime, Size: out.size, Path: out.path, Bytes: offset}})
 		}
 		if err == io.EOF {
 			break
@@ -177,7 +179,7 @@ func (h *Hub) runOutgoingFlip(c *PeerConn, f *os.File, out *outgoingFlip, start 
 		return
 	}
 	h.emit(HubEvent{Kind: EventFlipCompleted, Peer: c.Name, Text: out.filename,
-		Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Size: out.size, Path: out.path, Bytes: offset, Sha256: sum}})
+		Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Mime: out.mime, Size: out.size, Path: out.path, Bytes: offset, Sha256: sum}})
 }
 
 func (h *Hub) emitFlipFailed(peerName string, out *outgoingFlip, sent int64, reason string) {

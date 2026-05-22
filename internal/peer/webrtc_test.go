@@ -263,6 +263,12 @@ func TestWebRTCFlipSniffsMime(t *testing.T) {
 	if _, err := ha.SendFlip("bob", src.Name()); err != nil {
 		t.Fatalf("send flip: %v", err)
 	}
+	// The SENDER's completed event must also carry the mime, or the sender's
+	// own preview (served from their original file) won't render.
+	sent := waitEvent(t, ha, EventFlipCompleted, 20*time.Second)
+	if sfd, ok := sent.Data.(*FlipEventData); !ok || sfd.Mime != "image/png" {
+		t.Fatalf("sender completed mime = %+v, want image/png", sent.Data)
+	}
 	done := waitEvent(t, hb, EventFlipCompleted, 20*time.Second)
 	fd, ok := done.Data.(*FlipEventData)
 	if !ok {
