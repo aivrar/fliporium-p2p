@@ -1842,6 +1842,7 @@ func (a *App) SendBoothFlip(boothID, localPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	log.Printf("flip: booth=%s path=%q members=%d connected=%v", boothID, localPath, len(members), a.hub.Names())
 	id, err := newBoothID() // UUIDv4 helper, reused
 	if err != nil {
 		return "", err
@@ -1891,6 +1892,28 @@ func (a *App) PickAndSendFlip(peerName string) (string, error) {
 		return "", nil
 	}
 	return a.hub.SendFlip(peerName, path)
+}
+
+// PickAndSendBoothFlip pops the OS file picker, then flips the chosen file to
+// everyone in the room. The reliable way to send a file in a room (works even
+// where native drag-and-drop doesn't).
+func (a *App) PickAndSendBoothFlip(boothID string) (string, error) {
+	if a.hub == nil || a.store == nil {
+		return "", fmt.Errorf("app not ready")
+	}
+	if boothID == "" {
+		return "", fmt.Errorf("room required")
+	}
+	path, err := wailsruntime.OpenFileDialog(a.ctx, wailsruntime.OpenDialogOptions{
+		Title: "Pick a file to send to the room",
+	})
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", nil
+	}
+	return a.SendBoothFlip(boothID, path)
 }
 
 // ListFlips returns the flip history with the named peer.

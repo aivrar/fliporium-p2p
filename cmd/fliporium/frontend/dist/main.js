@@ -1258,12 +1258,7 @@ function bindComposer() {
         if (!state.selection) return;
         try {
             if (state.selection.kind === "booth") {
-                // Pick a file then booth-flip it (sends to all booth members).
-                // The Go side has SendBoothFlip but no pick-then-booth-flip
-                // helper; mimic it here via PickAndSendFlip with the booth's
-                // first connected member, but that's a single-peer flip.
-                // For Phase 7 keep this simple: nudge user toward CLI.
-                toast("booth-flip: drag a file onto the window instead");
+                await window.go.main.App.PickAndSendBoothFlip(state.selection.key);
             } else {
                 await window.go.main.App.PickAndSendFlip(state.selection.key);
             }
@@ -1326,24 +1321,32 @@ function bindDragDrop() {
             clearTimeout(hideT);
             hideT = setTimeout(() => $("drop-overlay").classList.add("hidden"), 800);
         });
+        // useDropTarget=false → drops anywhere in the window fire this, rather
+        // than only on elements tagged with a special CSS property (the Wails
+        // default, which silently swallowed our drops).
         window.runtime.OnFileDrop(async (x, y, paths) => {
             $("drop-overlay").classList.add("hidden");
             if (!state.selection) {
-                toast("select a peer or booth first");
+                toast("open a room or peer first, then drop the file");
                 return;
             }
-            for (const p of (paths || [])) {
+            if (!paths || paths.length === 0) {
+                toast("couldn't read the dropped file's path");
+                return;
+            }
+            for (const p of paths) {
                 try {
                     if (state.selection.kind === "booth") {
                         await window.go.main.App.SendBoothFlip(state.selection.key, p);
                     } else {
                         await window.go.main.App.SendFlip(state.selection.key, p);
                     }
+                    toast("sending " + p.split(/[\\/]/).pop() + "…");
                 } catch (e) {
-                    toast("flip " + p + ": " + e);
+                    toast("flip failed: " + e);
                 }
             }
-        });
+        }, false);
     }
     // Show overlay on plain HTML drag-over too, as a UX hint.
     document.addEventListener("dragover", (e) => {
