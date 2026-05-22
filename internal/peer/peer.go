@@ -337,6 +337,21 @@ func (h *Hub) BroadcastPeerStatus(s PeerStatus) {
 	}
 }
 
+// CloseAllPeers closes every active connection without sending BYE. Used when
+// leaving a room: each runLoop observes the close, emits EventDisconnect, and
+// removes itself from the map.
+func (h *Hub) CloseAllPeers() {
+	h.mu.RLock()
+	conns := make([]*PeerConn, 0, len(h.conns))
+	for _, c := range h.conns {
+		conns = append(conns, c)
+	}
+	h.mu.RUnlock()
+	for _, c := range conns {
+		c.Close()
+	}
+}
+
 // ByeAll sends BYE to every peer and closes their connections.
 func (h *Hub) ByeAll(reason string) {
 	h.mu.RLock()

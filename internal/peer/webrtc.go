@@ -46,27 +46,40 @@ func (h *Hub) AttachDataChannel(rwc io.ReadWriteCloser, selfName string) (string
 	return remote.Name, nil
 }
 
-// RunWebRTC joins a signaling room and maintains a WebRTC mesh, attaching every
-// peer's DataChannel to the Hub. Blocks until ctx is cancelled or signaling
-// drops. selfName is both this peer's signaling id and its HELLO display name
-// (in Phase 1 these are the same; identity becomes a pubkey in Phase 2).
-func (h *Hub) RunWebRTC(ctx context.Context, signalURL, room, selfName string, stun []string) error {
-	r, err := rtc.JoinRoom(ctx, signalURL, room, selfName, stun)
+// JoinRoom connects to a signaling room and maintains a WebRTC mesh, attaching
+// every peer's DataChannel to the Hub. Non-blocking: it returns the live Room
+// so the caller can Close() it to leave (then call Hub.CloseAllPeers to drop
+// the room's connections). The room's signaling pump runs until ctx is
+// cancelled or the room is closed.
+func (h *Hub) JoinRoom(ctx context.Context, signalURL, roomID, selfName string, stun []string) (*rtc.Room, error) {
+	r, err := rtc.JoinRoom(ctx, signalURL, roomID, selfName, stun)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer r.Close()
-
 	r.OnPeer = func(remoteID string, rwc io.ReadWriteCloser, initiator bool) {
 		if _, err := h.AttachDataChannel(rwc, selfName); err != nil {
 			h.emit(HubEvent{Kind: EventInfo, Text: "webrtc attach " + remoteID + ": " + err.Error()})
 		}
 	}
 	r.OnPeerLeft = func(remoteID string) {
-		// remoteID is the signaling id, which equals the HELLO name in Phase 1.
+		// remoteID is the signaling id, which equals the HELLO name for now.
 		if c := h.Get(remoteID); c != nil {
 			c.Close() // runLoop observes EOF → emits EventDisconnect + removes
 		}
 	}
-	return r.Run(ctx)
+	go func() { _ = r.Run(ctx) }()
+	return r, nil
+}
+
+// RunWebRTC joins a room and blocks until ctx is cancelled, then leaves. A
+// convenience wrapper around JoinRoom for callers (and tests) that want a
+// single fixed room for the process lifetime.
+func (h *Hub) RunWebRTC(ctx context.Context, signalURL, roomID, selfName string, stun []string) error {
+	r, err := h.JoinRoom(ctx, signalURL, roomID, selfName, stun)
+	if err != nil {
+		return err
+	}
+	<-ctx.Done()
+	r.Close()
+	return ctx.Err()
 }

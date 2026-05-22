@@ -27,7 +27,6 @@ func waitEvent(t *testing.T, h *Hub, kind HubEventKind, timeout time.Duration) H
 			t.Fatalf("timed out after %s waiting for %s", timeout, kind)
 		}
 	}
-	return HubEvent{}
 }
 
 // TestWebRTCHubParity proves the existing Hub machinery — 1:1 messages, booth
@@ -109,5 +108,34 @@ func TestWebRTCHubParity(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("caught file content mismatch: got %d bytes, want %d", len(got), len(want))
+	}
+}
+
+// TestWebRTCRoomIsolation proves peers only mesh-connect within their own
+// signaling room — the basis for invite-link rooms being separate spaces.
+func TestWebRTCRoomIsolation(t *testing.T) {
+	srv := httptest.NewServer(rtc.NewServer().Handler())
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ha := NewHub()
+	hb := NewHub()
+	hc := NewHub()
+	go func() { _ = ha.RunWebRTC(ctx, wsURL, "roomA", "alice", nil) }()
+	go func() { _ = hb.RunWebRTC(ctx, wsURL, "roomA", "bob", nil) }()
+	go func() { _ = hc.RunWebRTC(ctx, wsURL, "roomB", "carol", nil) }()
+
+	// alice and bob share roomA → they connect.
+	waitEvent(t, ha, EventConnect, 20*time.Second)
+	if ha.Get("bob") == nil {
+		t.Fatal("alice should be connected to bob in roomA")
+	}
+	// carol is alone in roomB → alice must never see her.
+	time.Sleep(500 * time.Millisecond)
+	if ha.Get("carol") != nil {
+		t.Fatalf("alice connected to carol across rooms: %v", ha.Names())
 	}
 }

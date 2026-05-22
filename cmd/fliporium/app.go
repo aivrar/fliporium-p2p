@@ -20,6 +20,7 @@ import (
 
 	"fliporium/internal/identity"
 	"fliporium/internal/peer"
+	"fliporium/internal/rtc"
 	"fliporium/internal/store"
 
 	qrcode "github.com/skip2/go-qrcode"
@@ -198,6 +199,14 @@ type App struct {
 	dataDir  string
 	identity identity.Identity
 
+	// WebRTC transport state. One active signaling room at a time; switching
+	// rooms closes the old mesh and joins the new one.
+	signalURL     string
+	stun          []string
+	roomMu        sync.Mutex
+	room          *rtc.Room
+	currentRoomID string
+
 	// authKeyCh delivers the pre-auth key from the JS-side onboarding modal
 	// when the user has no existing tsnet state and no FLIPORIUM_AUTHKEY env
 	// var. initBackground blocks on this channel until SetAuthKey is called.
@@ -241,6 +250,9 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.room != nil {
+		a.room.Close()
+	}
 	if a.hub != nil {
 		a.hub.ByeAll("window closed")
 	}
@@ -362,10 +374,10 @@ func (a *App) initBackground() {
 // room and connect peer-to-peer. The Hub, store, and event pump are shared
 // verbatim with the tsnet path — only how PeerConns are created differs.
 func (a *App) initWebRTC(signalURL string) {
-	room := env("FLIPORIUM_ROOM", "fliporium")
-	stun := []string{"stun:stun.l.google.com:19302"}
+	a.signalURL = signalURL
+	a.stun = []string{"stun:stun.l.google.com:19302"}
 	if s := os.Getenv("FLIPORIUM_STUN"); s != "" {
-		stun = strings.Split(s, ",")
+		a.stun = strings.Split(s, ",")
 	}
 
 	a.mu.Lock()
@@ -375,16 +387,173 @@ func (a *App) initWebRTC(signalURL string) {
 	a.hub = peer.NewHub()
 	a.hub.CatchRoot = filepath.Join(a.dataDir, "catch")
 	go a.eventPump()
-
-	log.Printf("init: webrtc transport (signal=%s room=%s host=%s)", signalURL, room, a.hostname)
 	a.setState(StateReady, "")
 
-	go func() {
-		if err := a.hub.RunWebRTC(a.ctx, signalURL, room, a.hostname, stun); err != nil {
-			log.Printf("webrtc: transport ended: %v", err)
-			a.setState(StateError, "connection lost: "+err.Error())
+	// Rejoin the last room (or a configured default) so a returning user lands
+	// back where they were. New users create/join a room from the UI.
+	initial, _ := a.store.GetSetting(a.ctx, settingCurrentRoom)
+	if initial == "" {
+		initial = env("FLIPORIUM_ROOM", "")
+	}
+	log.Printf("init: webrtc transport ready (signal=%s host=%s initialRoom=%q)", signalURL, a.hostname, initial)
+	if initial != "" {
+		go func() {
+			if err := a.switchRoom(initial); err != nil {
+				log.Printf("webrtc: initial room join %q: %v", initial, err)
+			}
+		}()
+	}
+}
+
+const settingCurrentRoom = "current_room"
+
+// RoomInfo describes a room and its shareable invite link.
+type RoomInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Link string `json:"link"`
+}
+
+// switchRoom leaves the current signaling room (dropping its mesh) and joins
+// another. One active room at a time.
+func (a *App) switchRoom(roomID string) error {
+	if a.hub == nil {
+		return fmt.Errorf("transport not ready")
+	}
+	a.roomMu.Lock()
+	defer a.roomMu.Unlock()
+	if a.room != nil {
+		a.room.Close()
+		a.room = nil
+		a.hub.CloseAllPeers()
+	}
+	r, err := a.hub.JoinRoom(a.ctx, a.signalURL, roomID, a.hostname, a.stun)
+	if err != nil {
+		return err
+	}
+	a.room = r
+	a.currentRoomID = roomID
+	_ = a.store.SetSetting(a.ctx, settingCurrentRoom, roomID)
+	wailsruntime.EventsEmit(a.ctx, "room-changed", roomID)
+	return nil
+}
+
+// CreateRoom makes a new room (a booth joined over a fresh signaling room),
+// switches to it, and returns its shareable invite link.
+func (a *App) CreateRoom(name string) (RoomInfo, error) {
+	if a.store == nil || a.hub == nil {
+		return RoomInfo{}, fmt.Errorf("app not ready")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "Untitled room"
+	}
+	id, err := newBoothID()
+	if err != nil {
+		return RoomInfo{}, err
+	}
+	now := time.Now().UTC()
+	if err := a.store.UpsertBooth(a.ctx, store.Booth{ID: id, Name: name, Founder: a.hostname, FoundedAt: now}); err != nil {
+		return RoomInfo{}, err
+	}
+	_ = a.store.AddBoothMember(a.ctx, id, a.hostname, now)
+	if err := a.switchRoom(id); err != nil {
+		return RoomInfo{}, err
+	}
+	wailsruntime.EventsEmit(a.ctx, "booth", BoothRecord{
+		ID: id, Name: name, Founder: a.hostname,
+		FoundedAt: now.Format(time.RFC3339Nano), Members: []string{a.hostname},
+	})
+	return RoomInfo{ID: id, Name: name, Link: roomLink(id, name)}, nil
+}
+
+// JoinRoomByLink parses an invite link, records the room locally, and switches
+// to it. The mesh connects to whoever else is currently in the room.
+func (a *App) JoinRoomByLink(link string) (RoomInfo, error) {
+	if a.store == nil || a.hub == nil {
+		return RoomInfo{}, fmt.Errorf("app not ready")
+	}
+	id, name := parseRoomLink(link)
+	if id == "" {
+		return RoomInfo{}, fmt.Errorf("that doesn't look like a valid invite link")
+	}
+	if name == "" {
+		short := id
+		if len(short) > 8 {
+			short = short[:8]
 		}
-	}()
+		name = "Room " + short
+	}
+	now := time.Now().UTC()
+	if err := a.store.UpsertBooth(a.ctx, store.Booth{ID: id, Name: name, FoundedAt: now}); err != nil {
+		return RoomInfo{}, err
+	}
+	_ = a.store.AddBoothMember(a.ctx, id, a.hostname, now)
+	if err := a.switchRoom(id); err != nil {
+		return RoomInfo{}, err
+	}
+	wailsruntime.EventsEmit(a.ctx, "booth", BoothRecord{
+		ID: id, Name: name, FoundedAt: now.Format(time.RFC3339Nano), Members: []string{a.hostname},
+	})
+	return RoomInfo{ID: id, Name: name, Link: roomLink(id, name)}, nil
+}
+
+// SwitchRoom re-enters a room the user already knows about (by booth id).
+func (a *App) SwitchRoom(roomID string) error {
+	if strings.TrimSpace(roomID) == "" {
+		return fmt.Errorf("room id required")
+	}
+	return a.switchRoom(roomID)
+}
+
+// CurrentRoom returns the id of the room currently joined ("" if none).
+func (a *App) CurrentRoom() (string, error) {
+	a.roomMu.Lock()
+	defer a.roomMu.Unlock()
+	return a.currentRoomID, nil
+}
+
+// RoomLinkFor returns the shareable invite link for a room the user is in.
+func (a *App) RoomLinkFor(roomID string) (string, error) {
+	if a.store == nil {
+		return "", fmt.Errorf("store not ready")
+	}
+	b, err := a.store.GetBooth(a.ctx, roomID)
+	if err != nil {
+		return "", err
+	}
+	return roomLink(b.ID, b.Name), nil
+}
+
+// roomLink builds the shareable invite URL. The room id + name live in the URL
+// fragment (after #), which browsers never send to the server.
+func roomLink(id, name string) string {
+	v := url.Values{}
+	v.Set("r", id)
+	if name != "" {
+		v.Set("n", name)
+	}
+	return "https://fliporium.com/join#" + v.Encode()
+}
+
+// parseRoomLink extracts the room id and name from an invite link. Accepts the
+// full https://fliporium.com/join#r=...&n=... URL, a bare "r=...&n=..."
+// fragment, or a bare room id.
+func parseRoomLink(link string) (id, name string) {
+	link = strings.TrimSpace(link)
+	frag := link
+	if i := strings.LastIndex(link, "#"); i >= 0 {
+		frag = link[i+1:]
+	}
+	if v, err := url.ParseQuery(frag); err == nil {
+		if r := v.Get("r"); r != "" {
+			return r, v.Get("n")
+		}
+	}
+	if link != "" && !strings.ContainsAny(link, "/ #") {
+		return link, "" // bare id
+	}
+	return "", ""
 }
 
 func (a *App) acceptLoop() {
@@ -408,6 +577,14 @@ func (a *App) eventPump() {
 		switch ev.Kind {
 		case peer.EventConnect:
 			_ = a.store.UpsertPeer(a.ctx, ev.Peer)
+			// In a room, a connecting peer becomes a member so message/flip
+			// fan-out reaches them.
+			a.roomMu.Lock()
+			cur := a.currentRoomID
+			a.roomMu.Unlock()
+			if cur != "" {
+				_ = a.store.AddBoothMember(a.ctx, cur, ev.Peer, ev.At)
+			}
 			wailsruntime.EventsEmit(a.ctx, "peer-state-changed", map[string]any{
 				"peer":      ev.Peer,
 				"connected": true,
