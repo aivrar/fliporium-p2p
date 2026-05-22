@@ -178,15 +178,6 @@ type BoothRecord struct {
 	Members   []string `json:"members"`
 }
 
-// NotepadRecord is the shared booth notepad surfaced to the frontend.
-type NotepadRecord struct {
-	BoothID      string `json:"boothId"`
-	Text         string `json:"text"`
-	Version      int64  `json:"version"`
-	LastEditor   string `json:"lastEditor"`
-	LastModified string `json:"lastModified,omitempty"`
-}
-
 // FlipRecord is what the frontend sees about a file transfer.
 type FlipRecord struct {
 	ID          string `json:"id"`
@@ -794,27 +785,6 @@ func (a *App) eventPump() {
 				"sessionId": s.SessionID,
 				"boothId":   s.BoothID,
 			})
-		case peer.EventNotepadUpdated:
-			n, _ := ev.Data.(*peer.NotepadUpdate)
-			if n == nil {
-				continue
-			}
-			applied, _ := a.store.UpdateBoothNotepad(a.ctx, store.BoothNotepad{
-				BoothID:      n.BoothID,
-				Text:         n.Text,
-				Version:      n.Version,
-				LastEditor:   n.Editor,
-				LastModified: n.At,
-			})
-			if applied {
-				wailsruntime.EventsEmit(a.ctx, "notepad", NotepadRecord{
-					BoothID:      n.BoothID,
-					Text:         n.Text,
-					Version:      n.Version,
-					LastEditor:   n.Editor,
-					LastModified: n.At.UTC().Format(time.RFC3339Nano),
-				})
-			}
 		case peer.EventTwinSyncedMessage:
 			ts, _ := ev.Data.(*peer.TwinSyncMessage)
 			if ts == nil {
@@ -1604,7 +1574,7 @@ func (a *App) PeerStatuses() (map[string]string, error) {
 // BurnEverything permanently wipes the local data directory and quits the app.
 // The caller must pass the literal phrase "burn everything" or the call is
 // rejected. After this returns, all chat history, identity, caught files,
-// notepad text, and settings are gone — there is no undo.
+// and settings are gone — there is no undo.
 func (a *App) BurnEverything(confirm string) error {
 	if confirm != "burn everything" {
 		return fmt.Errorf("confirmation phrase mismatch (type exactly: burn everything)")
@@ -1742,74 +1712,6 @@ func (a *App) ClearTwin() error {
 		return fmt.Errorf("store not ready")
 	}
 	return a.store.DeleteSetting(a.ctx, store.SettingTwinHostname)
-}
-
-// ---------- Notepad bindings ----------
-
-// GetNotepad returns the current shared notepad for a booth (or an empty one).
-func (a *App) GetNotepad(boothID string) (NotepadRecord, error) {
-	if a.store == nil {
-		return NotepadRecord{}, fmt.Errorf("store not ready")
-	}
-	n, err := a.store.GetBoothNotepad(a.ctx, boothID)
-	if err != nil {
-		return NotepadRecord{}, err
-	}
-	rec := NotepadRecord{
-		BoothID:    n.BoothID,
-		Text:       n.Text,
-		Version:    n.Version,
-		LastEditor: n.LastEditor,
-	}
-	if !n.LastModified.IsZero() {
-		rec.LastModified = n.LastModified.UTC().Format(time.RFC3339Nano)
-	}
-	return rec, nil
-}
-
-// UpdateNotepad commits a new version of the shared notepad locally and
-// broadcasts the change to every connected booth member.
-func (a *App) UpdateNotepad(boothID, text string) (NotepadRecord, error) {
-	if a.store == nil || a.hub == nil {
-		return NotepadRecord{}, fmt.Errorf("app not ready")
-	}
-	cur, _ := a.store.GetBoothNotepad(a.ctx, boothID)
-	next := store.BoothNotepad{
-		BoothID:      boothID,
-		Text:         text,
-		Version:      cur.Version + 1,
-		LastEditor:   a.hostname,
-		LastModified: time.Now().UTC(),
-	}
-	if _, err := a.store.UpdateBoothNotepad(a.ctx, next); err != nil {
-		return NotepadRecord{}, err
-	}
-	members, _ := a.store.BoothMembers(a.ctx, boothID)
-	upd := peer.NotepadUpdate{
-		BoothID: boothID,
-		Text:    text,
-		Version: next.Version,
-		Editor:  a.hostname,
-		At:      next.LastModified,
-	}
-	for _, m := range members {
-		if m.PeerName == a.hostname {
-			continue
-		}
-		if a.hub.Get(m.PeerName) == nil {
-			continue
-		}
-		_ = a.hub.SendNotepadUpdate(m.PeerName, upd)
-	}
-	rec := NotepadRecord{
-		BoothID:      boothID,
-		Text:         text,
-		Version:      next.Version,
-		LastEditor:   a.hostname,
-		LastModified: next.LastModified.UTC().Format(time.RFC3339Nano),
-	}
-	wailsruntime.EventsEmit(a.ctx, "notepad", rec)
-	return rec, nil
 }
 
 // EndShowtime broadcasts a SHOWTIME_END.

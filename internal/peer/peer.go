@@ -119,8 +119,6 @@ const (
 	EventShowtimeState   HubEventKind = "showtime-state"
 	EventShowtimeEnded   HubEventKind = "showtime-ended"
 
-	EventNotepadUpdated HubEventKind = "notepad-updated"
-
 	EventTwinSyncedMessage HubEventKind = "twin-synced-message"
 
 	EventMessageReaction HubEventKind = "message-reaction"
@@ -315,14 +313,6 @@ func (h *Hub) SendShowtimeEnd(peerName string, s ShowtimeEnd) error {
 	return c.WriteFrame(TypeShowtimeEnd, s)
 }
 
-// SendNotepadUpdate broadcasts a NOTEPAD_UPDATE to one peer.
-func (h *Hub) SendNotepadUpdate(peerName string, n NotepadUpdate) error {
-	c := h.Get(peerName)
-	if c == nil {
-		return fmt.Errorf("no active connection to %q", peerName)
-	}
-	return c.WriteFrame(TypeNotepadUpdate, n)
-}
 
 // SendTwinSyncMessage sends a 1:1 message relay to a paired twin.
 func (h *Hub) SendTwinSyncMessage(peerName string, m TwinSyncMessage) error {
@@ -499,11 +489,6 @@ func (h *Hub) runLoop(c *PeerConn) {
 			var s ShowtimeEnd
 			if err := json.Unmarshal(body, &s); err == nil {
 				h.emit(HubEvent{Kind: EventShowtimeEnded, Peer: c.Name, Data: &s})
-			}
-		case TypeNotepadUpdate:
-			var n NotepadUpdate
-			if err := json.Unmarshal(body, &n); err == nil {
-				h.emit(HubEvent{Kind: EventNotepadUpdated, Peer: c.Name, Data: &n})
 			}
 		case TypeTwinSyncMessage:
 			var t TwinSyncMessage

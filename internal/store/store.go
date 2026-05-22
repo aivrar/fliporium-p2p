@@ -80,17 +80,6 @@ type BoothMember struct {
 	JoinedAt time.Time
 }
 
-// BoothNotepad is the single shared text document per booth (Phase 8 v0.1).
-// Conflict resolution is last-write-wins by Version; v0.2 will swap this for
-// a CRDT (Y.js or Automerge) to support real-time concurrent editing.
-type BoothNotepad struct {
-	BoothID      string
-	Text         string
-	Version      int64
-	LastEditor   string
-	LastModified time.Time
-}
-
 // FlipStatus tracks where a transfer is in its lifecycle.
 const (
 	FlipStatusStarted   = "started"
@@ -211,14 +200,6 @@ CREATE TABLE IF NOT EXISTS booth_members (
     peer_name TEXT NOT NULL,
     joined_at TEXT NOT NULL,
     PRIMARY KEY (booth_id, peer_name)
-);
-
-CREATE TABLE IF NOT EXISTS booth_notepads (
-    booth_id      TEXT PRIMARY KEY,
-    text          TEXT NOT NULL,
-    version       INTEGER NOT NULL,
-    last_editor   TEXT NOT NULL,
-    last_modified TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -876,51 +857,6 @@ const (
 	SettingSeenPeers    = "seen_peers"   // comma-separated peer names for confetti dedup
 	SettingDisplayName  = "display_name" // user-chosen label, separate from identity
 )
-
-// GetBoothNotepad returns the shared notepad for a booth (or an empty record
-// if the booth has none yet).
-func (s *Store) GetBoothNotepad(ctx context.Context, boothID string) (BoothNotepad, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT booth_id, text, version, last_editor, last_modified
-		FROM booth_notepads WHERE booth_id = ?
-	`, boothID)
-	var n BoothNotepad
-	var modStr string
-	if err := row.Scan(&n.BoothID, &n.Text, &n.Version, &n.LastEditor, &modStr); err != nil {
-		if err == sql.ErrNoRows {
-			return BoothNotepad{BoothID: boothID}, nil
-		}
-		return BoothNotepad{}, err
-	}
-	n.LastModified, _ = time.Parse(time.RFC3339Nano, modStr)
-	return n, nil
-}
-
-// UpdateBoothNotepad upserts the notepad if the incoming version is strictly
-// greater than what's stored (last-write-wins). Returns true if applied.
-func (s *Store) UpdateBoothNotepad(ctx context.Context, n BoothNotepad) (bool, error) {
-	if n.BoothID == "" {
-		return false, fmt.Errorf("booth id required")
-	}
-	if n.LastModified.IsZero() {
-		n.LastModified = time.Now().UTC()
-	}
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO booth_notepads (booth_id, text, version, last_editor, last_modified)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(booth_id) DO UPDATE SET
-			text          = excluded.text,
-			version       = excluded.version,
-			last_editor   = excluded.last_editor,
-			last_modified = excluded.last_modified
-		WHERE excluded.version > booth_notepads.version
-	`, n.BoothID, n.Text, n.Version, n.LastEditor, n.LastModified.UTC().Format(time.RFC3339Nano))
-	if err != nil {
-		return false, err
-	}
-	rows, _ := res.RowsAffected()
-	return rows > 0, nil
-}
 
 // BoothMembers returns the peer names that belong to a booth.
 func (s *Store) BoothMembers(ctx context.Context, boothID string) ([]BoothMember, error) {

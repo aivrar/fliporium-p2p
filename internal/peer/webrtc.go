@@ -1,8 +1,8 @@
 // WebRTC transport glue. This wires the transport-only rtc package (signaling
 // + DataChannel mesh) into the existing Hub: each opened DataChannel becomes a
 // PeerConn driven by the same runLoop, so every feature (chat, flips, booths,
-// showtime, notepad, reactions...) works peer-to-peer with zero protocol
-// changes. The 4-byte length-prefixed envelopes ride the DataChannel as-is.
+// showtime, reactions...) works peer-to-peer with zero protocol changes. The
+// 4-byte length-prefixed envelopes ride the DataChannel as-is.
 package peer
 
 import (

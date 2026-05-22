@@ -544,46 +544,6 @@ html[data-theme="light"] .reply-banner { background: #ece4ff; color: #1c1c24; }
 #attachBtn:hover:not(:disabled) { background: #1f1f29; color: #c9a7ff; }
 #attachBtn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* ---------- notepad ---------- */
-#notepad-panel {
-    border-bottom: 1px solid #2a2a36;
-    background: #16161d;
-    padding: 8px 14px 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 240px;
-}
-#notepad-panel .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    color: #c9a7ff;
-    font-size: 10px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-}
-#notepad-meta {
-    color: #6f7384;
-    text-transform: none;
-    letter-spacing: 0;
-    font-size: 11px;
-}
-#notepad-text {
-    flex: 1;
-    background: #0e0e14;
-    border: 1px solid #2a2a36;
-    border-radius: 6px;
-    color: #d8dee9;
-    font: 13px/1.4 "Cascadia Mono", Consolas, monospace;
-    padding: 8px 10px;
-    resize: none;
-    outline: none;
-    min-height: 80px;
-    max-height: 200px;
-}
-#notepad-text:focus { border-color: #5b3aa3; }
-
 /* ---------- showtime ---------- */
 #showtime-panel {
     border-bottom: 1px solid #2a2a36;
@@ -680,8 +640,6 @@ html[data-theme="light"] .msg .body pre { background: #f0f0f4; }
 html[data-theme="light"] #composer { background: #ececf2; border-top-color: #e2e2ea; }
 html[data-theme="light"] #composer input { background: #fff; border-color: #d0d0d8; color: #1c1c24; }
 html[data-theme="light"] #composer button { background: #ece4ff; color: #5b3aa3; border-color: #d6c5ff; }
-html[data-theme="light"] #notepad-panel { background: #ececf2; border-bottom-color: #e2e2ea; }
-html[data-theme="light"] #notepad-text { background: #fff; border-color: #d0d0d8; color: #1c1c24; }
 html[data-theme="light"] #showtime-panel { background: #ececf2; border-bottom-color: #e2e2ea; }
 html[data-theme="light"] .flip.in { background: #fff; border-color: #e2e2ea; color: #1c1c24; }
 html[data-theme="light"] .flip.out { background: #ece4ff; border-color: #d6c5ff; color: #1c1c24; }

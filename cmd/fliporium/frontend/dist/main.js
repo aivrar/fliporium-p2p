@@ -15,16 +15,12 @@ const state = {
     msgsByBooth: new Map(),                      // boothId -> [MessageRecord]
     flipsByPeer: new Map(),                      // peer -> Map<id, FlipRecord>
     showtimeByBooth: new Map(),                  // boothId -> { sessionId, flipId, leader, filename, mime, position, playing }
-    notepadByBooth: new Map(),                   // boothId -> NotepadRecord
     peerStatus: new Map(),                       // peerName -> "active"|"idle"|"away"
     replyingTo: null,                            // { uuid, text, peer } when composing a reply
     appState: "initializing",
 };
 
 const QUICK_REACTIONS = ["👍","❤️","😂","🎉","🔥","🙏"];
-
-let notepadDebounce = null;
-const NOTEPAD_DEBOUNCE_MS = 500;
 
 let leaderStateInterval = null;
 let suppressNextEvent = false;
@@ -599,7 +595,6 @@ function renderChat() {
 }
 
 function renderChatPeer(name, list) {
-    $("notepad-panel").classList.add("hidden");
     const peer = state.peers.find(p => p.name === name);
     $("chat-title").textContent = peer ? (peer.displayName || peer.name) : name;
     $("chat-state").textContent = peer && peer.connected
@@ -624,7 +619,6 @@ function renderChatBooth(boothId, list) {
     const booth = state.booths.find(b => b.id === boothId);
     if (!booth) {
         $("chat-title").textContent = "(missing booth)";
-        $("notepad-panel").classList.add("hidden");
         return;
     }
     $("chat-title").textContent = booth.name;
@@ -633,7 +627,6 @@ function renderChatBooth(boothId, list) {
     $("sendBtn").disabled = false;
     $("attachBtn").disabled = false; // booth-flip
     $("composerInput").placeholder = "post to " + booth.name + " ...";
-    renderNotepadPanel(boothId);
     // also: any flips visible in the booth (cards) — for now flips for booths
     // arrive as 1:1 flips per member, so we surface flip cards by including
     // them from each peer's flip list whose peer is also a booth member.
@@ -653,41 +646,6 @@ function renderChatBooth(boothId, list) {
         else if (item.kind === "flip") renderFlipCard(item.data, list);
     }
     renderShowtimePanel(boothId);
-}
-
-async function renderNotepadPanel(boothId) {
-    const panel = $("notepad-panel");
-    const ta = $("notepad-text");
-    panel.classList.remove("hidden");
-    let n = state.notepadByBooth.get(boothId);
-    if (!n) {
-        try {
-            n = await window.go.main.App.GetNotepad(boothId);
-            state.notepadByBooth.set(boothId, n || { boothId, text: "", version: 0 });
-        } catch (e) {
-            n = { boothId, text: "", version: 0 };
-        }
-    }
-    ta.dataset.boothId = boothId;
-    if (document.activeElement !== ta) {
-        ta.value = n.text || "";
-    }
-    const metaTxt = n.lastEditor
-        ? "v" + n.version + " by " + n.lastEditor + (n.lastModified ? " - " + shortTime(n.lastModified) : "")
-        : "(empty)";
-    $("notepad-meta").textContent = metaTxt;
-}
-
-function applyIncomingNotepad(rec) {
-    state.notepadByBooth.set(rec.boothId, rec);
-    const ta = $("notepad-text");
-    if (ta.dataset.boothId !== rec.boothId) return;
-    if (document.activeElement === ta) return; // user is editing; don't clobber
-    ta.value = rec.text || "";
-    const metaTxt = rec.lastEditor
-        ? "v" + rec.version + " by " + rec.lastEditor + (rec.lastModified ? " - " + shortTime(rec.lastModified) : "")
-        : "(empty)";
-    $("notepad-meta").textContent = metaTxt;
 }
 
 function renderShowtimePanel(boothId) {
@@ -1278,27 +1236,6 @@ function confettiBurst(count = 60) {
 
 // ---------- composer + attach + drop ----------
 
-function bindNotepad() {
-    $("notepad-text").addEventListener("input", () => {
-        const ta = $("notepad-text");
-        const boothId = ta.dataset.boothId;
-        if (!boothId) return;
-        if (notepadDebounce) clearTimeout(notepadDebounce);
-        notepadDebounce = setTimeout(async () => {
-            try {
-                const rec = await window.go.main.App.UpdateNotepad(boothId, ta.value);
-                if (rec) state.notepadByBooth.set(boothId, rec);
-                const metaTxt = rec && rec.lastEditor
-                    ? "v" + rec.version + " by " + rec.lastEditor + (rec.lastModified ? " - " + shortTime(rec.lastModified) : "")
-                    : "(empty)";
-                $("notepad-meta").textContent = metaTxt;
-            } catch (e) {
-                toast("notepad: " + e);
-            }
-        }, NOTEPAD_DEBOUNCE_MS);
-    });
-}
-
 function bindComposer() {
     $("composer").addEventListener("submit", async (ev) => {
         ev.preventDefault();
@@ -1514,8 +1451,6 @@ function bindEvents() {
         if (isBoothSelected(s.boothId)) renderShowtimePanel(s.boothId);
     });
 
-    window.runtime.EventsOn("notepad", (rec) => applyIncomingNotepad(rec));
-
     window.runtime.EventsOn("flip-progress", (p) => {
         updateFlipProgress(p.id, p.peer, p.bytes, p.size);
     });
@@ -1534,7 +1469,6 @@ function bindEvents() {
 async function boot() {
     await loadTheme();
     bindComposer();
-    bindNotepad();
     bindSearch();
     bindBackstage();
     bindTour();

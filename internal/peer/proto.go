@@ -38,9 +38,6 @@ const (
 	TypeShowtimeState MessageType = "SHOWTIME_STATE"
 	TypeShowtimeEnd   MessageType = "SHOWTIME_END"
 
-	// Workshop = collaborative tools (v0.8 ships the shared notepad).
-	TypeNotepadUpdate MessageType = "NOTEPAD_UPDATE"
-
 	// Twin Mode (v0.9): one Fliporium instance relays its own 1:1 chat
 	// history to a paired sibling instance owned by the same user.
 	TypeTwinSyncMessage MessageType = "TWIN_SYNC_MESSAGE"
@@ -159,16 +156,6 @@ type ShowtimeEnd struct {
 	SessionID string    `json:"session_id"`
 	BoothID   string    `json:"booth_id"`
 	At        time.Time `json:"at"`
-}
-
-// NotepadUpdate carries the full text of a booth's shared notepad, plus a
-// monotonically increasing Version for last-write-wins conflict resolution.
-type NotepadUpdate struct {
-	BoothID string    `json:"booth_id"`
-	Text    string    `json:"text"`
-	Version int64     `json:"version"`
-	Editor  string    `json:"editor"`
-	At      time.Time `json:"at"`
 }
 
 // TwinSyncMessage is one 1:1 chat row relayed from one of a user's devices
