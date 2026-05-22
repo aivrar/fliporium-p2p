@@ -227,6 +227,59 @@ func TestWebRTCBacklogMessage(t *testing.T) {
 	}
 }
 
+// TestWebRTCFlipSniffsMime proves a file with no extension still gets a real
+// mime (content-sniffed) AND that sniffing's read-then-rewind doesn't corrupt
+// the transfer — the bytes must land intact.
+func TestWebRTCFlipSniffsMime(t *testing.T) {
+	srv := httptest.NewServer(rtc.NewServer().Handler())
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	catchDir := t.TempDir()
+	ha := NewHub()
+	hb := NewHub()
+	hb.CatchRoot = catchDir
+	go func() { _ = ha.RunWebRTC(ctx, wsURL, "flip", "alice", nil) }()
+	go func() { _ = hb.RunWebRTC(ctx, wsURL, "flip", "bob", nil) }()
+	waitEvent(t, ha, EventConnect, 20*time.Second)
+	waitEvent(t, hb, EventConnect, 20*time.Second)
+
+	// A PNG header + filler, written to a file with NO extension ("noext-*"
+	// yields names like "noext-1234567" — no dot, so TypeByExtension fails and
+	// the sniffing path runs).
+	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte("payload-bytes!"), 1000)...)
+	src, err := os.CreateTemp(t.TempDir(), "noext-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.Write(png); err != nil {
+		t.Fatal(err)
+	}
+	src.Close()
+
+	if _, err := ha.SendFlip("bob", src.Name()); err != nil {
+		t.Fatalf("send flip: %v", err)
+	}
+	done := waitEvent(t, hb, EventFlipCompleted, 20*time.Second)
+	fd, ok := done.Data.(*FlipEventData)
+	if !ok {
+		t.Fatalf("no FlipEventData: %+v", done.Data)
+	}
+	if fd.Mime != "image/png" {
+		t.Fatalf("sniffed mime = %q, want image/png", fd.Mime)
+	}
+	got, err := os.ReadFile(fd.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, png) {
+		t.Fatalf("received %d bytes, want %d (rewind after sniff likely dropped the head)", len(got), len(png))
+	}
+}
+
 // TestWebRTCRoomIsolation proves peers only mesh-connect within their own
 // signaling room — the basis for invite-link rooms being separate spaces.
 func TestWebRTCRoomIsolation(t *testing.T) {
