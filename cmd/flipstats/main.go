@@ -33,7 +33,6 @@ import (
 	"net/http"
 	"net/smtp"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -44,12 +43,11 @@ import (
 )
 
 var (
-	listenAddr   = flag.String("listen", ":8088", "HTTP listen address")
-	dataDir      = flag.String("data", "/var/lib/flipstats", "Directory for the persistent counter")
-	exePath      = flag.String("exe", "/var/www/fliporium/dl/fliporium.exe", "Path to the .exe to serve")
-	headscaleBin = flag.String("headscale", "/usr/local/bin/headscale", "Path to headscale binary")
-	headscaleCfg = flag.String("headscale-cfg", "/etc/headscale/config.yaml", "Path to headscale config")
-	trustedProxy = flag.String("trusted-proxy", "127.0.0.1", "IP allowed to set X-Forwarded-For; usually Caddy on localhost")
+	listenAddr    = flag.String("listen", ":8088", "HTTP listen address")
+	dataDir       = flag.String("data", "/var/lib/flipstats", "Directory for the persistent counter")
+	exePath       = flag.String("exe", "/var/www/fliporium/dl/fliporium.exe", "Path to the .exe to serve")
+	signalStats   = flag.String("signal-stats", "http://127.0.0.1:8090/stats", "flipsignal /stats URL for live room/peer counts")
+	trustedProxy  = flag.String("trusted-proxy", "127.0.0.1", "IP allowed to set X-Forwarded-For; usually Caddy on localhost")
 )
 
 // SMTP relay config, read from the environment (set via the systemd
@@ -71,17 +69,15 @@ func smtpConfigured() bool {
 const (
 	counterFile  = "downloads.count"
 	pollInterval = 30 * time.Second
-	// A node is "online_now" if Headscale has heard from it inside this window.
-	onlineWindow = 5 * time.Minute
 )
 
 // stats is the shape of /api/stats output. Field names are snake_case so the
 // stats.html script can read them without translation.
 type stats struct {
-	Downloads        int64 `json:"downloads"`
-	OnlineNow        int   `json:"online_now"`
-	RegisteredTotal  int   `json:"registered_total"`
-	RefreshedAt      int64 `json:"refreshed_at"`
+	Downloads   int64 `json:"downloads"`
+	OnlineNow   int   `json:"online_now"` // peers connected to the signaling server now
+	Rooms       int   `json:"rooms"`      // active rooms now
+	RefreshedAt int64 `json:"refreshed_at"`
 }
 
 // downloads is incremented on every successful /dl/fliporium.exe response.
@@ -89,14 +85,13 @@ type stats struct {
 // stays correct under concurrent requests.
 var downloads atomic.Int64
 
-// nodeCounts is the cached output of the most recent headscale poll. Updated
-// in a background goroutine so /api/stats is always cheap (no fork+exec
-// per request).
+// Cached live counts from the most recent flipsignal /stats poll, so
+// /api/stats is always cheap.
 var (
-	nodeMu          sync.RWMutex
-	cachedOnline    int
-	cachedTotal     int
-	cachedAt        time.Time
+	nodeMu       sync.RWMutex
+	cachedOnline int
+	cachedRooms  int
+	cachedAt     time.Time
 )
 
 func main() {
@@ -109,10 +104,9 @@ func main() {
 	}
 	log.Printf("flipstats: starting; downloads=%d listen=%s exe=%s", downloads.Load(), *listenAddr, *exePath)
 
-	// Prime the headscale cache once before serving, so the first /api/stats
-	// response after startup isn't blank.
-	if err := refreshNodes(); err != nil {
-		log.Printf("flipstats: initial headscale poll failed (%v); /api/stats will report 0s until next tick", err)
+	// Prime the live counts once before serving.
+	if err := refreshSignalStats(); err != nil {
+		log.Printf("flipstats: initial signal-stats poll failed (%v); /api/stats reports 0s until next tick", err)
 	}
 	go pollLoop()
 
@@ -145,18 +139,16 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	nodeMu.RLock()
 	online := cachedOnline
-	total := cachedTotal
+	rooms := cachedRooms
 	at := cachedAt
 	nodeMu.RUnlock()
 
 	s := stats{
-		Downloads:       downloads.Load(),
-		OnlineNow:       online,
-		RegisteredTotal: total,
-		RefreshedAt:     at.Unix(),
+		Downloads:   downloads.Load(),
+		OnlineNow:   online,
+		Rooms:       rooms,
+		RefreshedAt: at.Unix(),
 	}
-	// Cache for 30s on the edge -- the underlying numbers change slowly and we
-	// don't want anyone hammering Headscale via this endpoint.
 	w.Header().Set("Cache-Control", "public, max-age=30")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(s)
@@ -282,36 +274,12 @@ func saveCounter(n int64) error {
 
 // ---------- headscale polling ----------
 
-// protoTimestamp matches Headscale's google.protobuf.Timestamp JSON shape.
-// The headscale CLI emits {"seconds": int64, "nanos": int32}, not RFC3339.
-type protoTimestamp struct {
-	Seconds int64 `json:"seconds"`
-	Nanos   int32 `json:"nanos"`
-}
-
-func (t protoTimestamp) Time() time.Time {
-	if t.Seconds <= 0 {
-		// Headscale uses {"seconds": -62135596800} to mean "unset" (Go's zero
-		// time). Treat as never-seen, well in the past.
-		return time.Time{}
-	}
-	return time.Unix(t.Seconds, int64(t.Nanos))
-}
-
-// headscaleNode is the subset of the headscale JSON output we care about.
-type headscaleNode struct {
-	ID        int            `json:"id"`
-	Name      string         `json:"name"`
-	GivenName string         `json:"given_name"`
-	LastSeen  protoTimestamp `json:"last_seen"`
-}
-
 func pollLoop() {
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
 	for range t.C {
-		if err := refreshNodes(); err != nil {
-			log.Printf("flipstats: headscale poll: %v", err)
+		if err := refreshSignalStats(); err != nil {
+			log.Printf("flipstats: signal-stats poll: %v", err)
 		}
 	}
 }
@@ -536,27 +504,28 @@ func appendContact(rec storedContact) error {
 	return err
 }
 
-func refreshNodes() error {
-	out, err := exec.Command(*headscaleBin, "-c", *headscaleCfg, "nodes", "list", "-o", "json").Output()
+// refreshSignalStats pulls live room/peer counts from the signaling server.
+func refreshSignalStats() error {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(*signalStats)
 	if err != nil {
-		return fmt.Errorf("headscale exec: %w", err)
+		return fmt.Errorf("signal-stats GET: %w", err)
 	}
-	var nodes []headscaleNode
-	if err := json.Unmarshal(out, &nodes); err != nil {
-		return fmt.Errorf("headscale json parse: %w", err)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("signal-stats HTTP %d", resp.StatusCode)
 	}
-	now := time.Now()
-	online := 0
-	for _, n := range nodes {
-		last := n.LastSeen.Time()
-		if !last.IsZero() && now.Sub(last) <= onlineWindow {
-			online++
-		}
+	var s struct {
+		Rooms int `json:"rooms"`
+		Peers int `json:"peers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
+		return fmt.Errorf("signal-stats decode: %w", err)
 	}
 	nodeMu.Lock()
-	cachedOnline = online
-	cachedTotal = len(nodes)
-	cachedAt = now
+	cachedOnline = s.Peers
+	cachedRooms = s.Rooms
+	cachedAt = time.Now()
 	nodeMu.Unlock()
 	return nil
 }

@@ -39,7 +39,7 @@
 
 <div class="page-title">
     <h1>Stats</h1>
-    <p>The whole tailnet, as a few numbers. Nothing per-user. Nothing more.</p>
+    <p>A few live numbers. Nothing per-user. Nothing more.</p>
 </div>
 
 <div class="stat-grid">
@@ -49,18 +49,18 @@
     </div>
     <div class="stat-card">
         <p class="stat-num pending" id="stat-online" data-loading="true"></p>
-        <p class="stat-label">Online right now</p>
+        <p class="stat-label">People connected now</p>
     </div>
     <div class="stat-card">
-        <p class="stat-num pending" id="stat-registered" data-loading="true"></p>
-        <p class="stat-label">Total registered</p>
+        <p class="stat-num pending" id="stat-rooms" data-loading="true"></p>
+        <p class="stat-label">Rooms active now</p>
     </div>
 </div>
 
 <p class="stat-note">
     Stats refresh when you reload the page. No JavaScript ping-back, no
-    fingerprinting, no per-visit tracking. Updated in near real time from our
-    Headscale control server.
+    fingerprinting, no per-visit tracking. Live counts come from the signaling
+    server, which only ever sees that a connection exists — never its contents.
 </p>
 
 <article class="doc">
@@ -69,10 +69,10 @@
 <dl>
     <dt>Downloads</dt>
     <dd>How many times <code>fliporium.exe</code> has been <em>fully</em> downloaded from this site. Only complete transfers count — the crawlers and link-scanners that probe the file and disconnect early (a constant background hum on the public internet) are filtered out, as are obvious bot user-agents. So this number leans toward real installs rather than curiosity pings.</dd>
-    <dt>Online right now</dt>
-    <dd>How many devices are connected to the Fliporium tailnet at this moment. A device is &ldquo;online&rdquo; if its WireGuard keepalive has fired in the last 5 minutes.</dd>
-    <dt>Total registered</dt>
-    <dd>How many unique devices have ever joined the tailnet. Includes devices that may have stopped using Fliporium and gotten cleaned up by our nightly stale-node sweep (we delete entries inactive for &gt;24h).</dd>
+    <dt>People connected now</dt>
+    <dd>How many devices are connected to the signaling server right this moment — i.e. people who currently have Fliporium open and joined to a room.</dd>
+    <dt>Rooms active now</dt>
+    <dd>How many separate rooms have at least one person in them right now. The signaling server counts rooms and connections to introduce peers; it never sees what's said inside them (that's peer-to-peer and encrypted).</dd>
 </dl>
 
 <h2>What this page doesn't do</h2>
@@ -124,7 +124,7 @@
         };
         set("stat-downloads", s.downloads);
         set("stat-online", s.online_now);
-        set("stat-registered", s.registered_total);
+        set("stat-rooms", s.rooms);
     } catch (e) {
         // Leave the placeholder dashes; failed silently is fine.
     }
