@@ -3,11 +3,8 @@ package main
 import (
 	"context"
 	cryptoRand "crypto/rand"
-	"crypto/tls"
-	"encoding/base64"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,19 +20,18 @@ import (
 	"fliporium/internal/rtc"
 	"fliporium/internal/store"
 
-	qrcode "github.com/skip2/go-qrcode"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
-	"tailscale.com/tsnet"
 )
 
-const controlURL = "https://headscale.fliporium.com"
+// defaultSignalURL is the public signaling server. Override with FLIPORIUM_SIGNAL
+// for local development.
+const defaultSignalURL = "wss://signal.fliporium.com/ws"
 
 // AppState describes where the App is in its lifecycle.
 type AppState string
 
 const (
 	StateInitializing AppState = "initializing"
-	StateNeedsAuthKey AppState = "needs-auth-key"
 	StateReady        AppState = "ready"
 	StateError        AppState = "error"
 )
@@ -189,11 +185,8 @@ type App struct {
 	stateMsg string
 	self     SelfInfo
 
-	srv    *tsnet.Server
-	hub    *peer.Hub
-	store  *store.Store
-	ln     net.Listener
-	tlsCfg *tls.Config
+	hub   *peer.Hub
+	store *store.Store
 
 	hostname string
 	dataDir  string
@@ -207,21 +200,13 @@ type App struct {
 	room          *rtc.Room
 	currentRoomID string
 
-	// authKeyCh delivers the pre-auth key from the JS-side onboarding modal
-	// when the user has no existing tsnet state and no FLIPORIUM_AUTHKEY env
-	// var. initBackground blocks on this channel until SetAuthKey is called.
-	authKeyCh chan string
-
 	statusMu   sync.Mutex
 	peerStatus map[string]string // peer name -> "active"|"idle"|"away"
 	myStatus   string
 }
 
 func NewApp() *App {
-	return &App{
-		state:     StateInitializing,
-		authKeyCh: make(chan string, 1),
-	}
+	return &App{state: StateInitializing}
 }
 
 func env(key, fallback string) string {
@@ -232,8 +217,8 @@ func env(key, fallback string) string {
 }
 
 // startup is called by Wails after the window is ready. We initialise
-// asynchronously so the window paints immediately rather than blocking
-// 10–30s on tsnet coming up.
+// asynchronously so the window paints immediately rather than blocking on
+// the transport coming up.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.hostname = env("FLIPORIUM_HOSTNAME", "fliporium-gui")
@@ -255,12 +240,6 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	if a.hub != nil {
 		a.hub.ByeAll("window closed")
-	}
-	if a.ln != nil {
-		a.ln.Close()
-	}
-	if a.srv != nil {
-		a.srv.Close()
 	}
 	if a.store != nil {
 		a.store.Close()
@@ -288,91 +267,12 @@ func (a *App) initBackground() {
 	}
 	a.store = st
 
-	// WebRTC transport (the product direction): when a signaling server is
-	// configured, peers connect peer-to-peer through a room instead of the
-	// tailnet. Falls through to the legacy tsnet path otherwise.
-	if signalURL := os.Getenv("FLIPORIUM_SIGNAL"); signalURL != "" {
-		a.initWebRTC(signalURL)
-		return
-	}
-
-	log.Printf("init: bringing up tsnet")
-	authKey := os.Getenv("FLIPORIUM_AUTHKEY")
-	// If we don't have a key AND there's no previously-registered tsnet state
-	// in the data dir, we cannot bring tsnet up -- it'd just time out. Sit in
-	// StateNeedsAuthKey until SetAuthKey delivers one from the onboarding UI.
-	if authKey == "" && !hasTsnetState(a.dataDir) {
-		log.Printf("init: no auth key and no prior state; waiting for onboarding key")
-		a.setState(StateNeedsAuthKey, "paste your invite key to get on the tailnet")
-		select {
-		case authKey = <-a.authKeyCh:
-			log.Printf("init: got auth key from onboarding (%d chars)", len(authKey))
-		case <-a.ctx.Done():
-			return
-		}
-	}
-
-	a.setState(StateInitializing, "bringing up tsnet…")
-	srv := &tsnet.Server{
-		Hostname:   a.hostname,
-		Dir:        a.dataDir,
-		ControlURL: controlURL,
-		AuthKey:    authKey,
-		Logf:       func(format string, args ...any) {},
-		UserLogf:   func(format string, args ...any) {},
-	}
-	a.srv = srv
-
-	bootCtx, cancelBoot := context.WithTimeout(a.ctx, 90*time.Second)
-	tsStatus, err := srv.Up(bootCtx)
-	cancelBoot()
-	if err != nil {
-		a.setState(StateError, "tsnet up: "+err.Error())
-		return
-	}
-
-	if tsStatus.Self != nil {
-		a.mu.Lock()
-		a.self = SelfInfo{
-			Hostname:    tsStatus.Self.HostName,
-			DisplayName: a.displayName(),
-			ID:          a.identity.ID(),
-			DNSName:     strings.TrimSuffix(tsStatus.Self.DNSName, "."),
-			IPs:         ipsAsStrings(tsStatus.Self.TailscaleIPs),
-			Online:      true,
-		}
-		a.mu.Unlock()
-	}
-
-	a.setState(StateInitializing, "starting peer listener…")
-	tlsCfg, err := peer.NewTLSConfig(a.hostname)
-	if err != nil {
-		a.setState(StateError, "tls: "+err.Error())
-		return
-	}
-	a.tlsCfg = tlsCfg
-
-	a.hub = peer.NewHub()
-	a.hub.CatchRoot = filepath.Join(a.dataDir, "catch")
-	listenAddr := fmt.Sprintf(":%d", peer.Port)
-	ln, err := srv.Listen("tcp", listenAddr)
-	if err != nil {
-		a.setState(StateError, "listen: "+err.Error())
-		return
-	}
-	a.ln = ln
-
-	go a.acceptLoop()
-	go a.eventPump()
-
-	log.Printf("init: ready (self=%+v)", a.self)
-	a.setState(StateReady, "")
+	signalURL := env("FLIPORIUM_SIGNAL", defaultSignalURL)
+	a.initWebRTC(signalURL)
 }
 
-// initWebRTC brings the app up on the WebRTC transport: identity is still the
-// hostname (pubkey identity arrives in Phase 2), peers meet in a signaling
-// room and connect peer-to-peer. The Hub, store, and event pump are shared
-// verbatim with the tsnet path — only how PeerConns are created differs.
+// initWebRTC brings the app up on the WebRTC transport: peers meet in a
+// signaling room and connect peer-to-peer over DataChannels.
 func (a *App) initWebRTC(signalURL string) {
 	a.signalURL = signalURL
 	a.stun = []string{"stun:stun.l.google.com:19302"}
@@ -554,20 +454,6 @@ func parseRoomLink(link string) (id, name string) {
 		return link, "" // bare id
 	}
 	return "", ""
-}
-
-func (a *App) acceptLoop() {
-	for {
-		raw, err := a.ln.Accept()
-		if err != nil {
-			return
-		}
-		go func() {
-			acceptCtx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
-			defer cancel()
-			a.hub.Accept(acceptCtx, raw, a.tlsCfg, a.hostname)
-		}()
-	}
 }
 
 // eventPump bridges peer.Hub events to (a) the SQLite store and
@@ -876,65 +762,7 @@ func (a *App) flipToRecord(peerName string, fd *peer.FlipEventData, status strin
 	return rec
 }
 
-func ipsAsStrings(ips any) []string {
-	// tsnet returns []netip.Addr; we convert to strings without importing the type
-	// here to keep this file free of the tailscale.com/util/dnsname etc. deps.
-	switch v := ips.(type) {
-	case []string:
-		return v
-	default:
-		out := []string{}
-		// Use fmt to render each addr.
-		s := fmt.Sprintf("%v", v)
-		s = strings.Trim(s, "[]")
-		if s == "" {
-			return out
-		}
-		for _, p := range strings.Split(s, " ") {
-			if p != "" {
-				out = append(out, p)
-			}
-		}
-		return out
-	}
-}
-
-// hasTsnetState reports whether the data dir already contains tsnet state
-// from a previous successful registration. If yes, tsnet can come up with
-// no AuthKey -- it uses the cached identity. If no, we need an auth key to
-// register a brand-new node, and that's where the onboarding modal comes in.
-//
-// tsnet writes "tailscaled.state" once it has registered. That single file is
-// our signal.
-func hasTsnetState(dir string) bool {
-	st, err := os.Stat(filepath.Join(dir, "tailscaled.state"))
-	return err == nil && st.Size() > 0
-}
-
 // ---------- bound methods (callable from JS) ----------
-
-// SetAuthKey delivers a pre-auth key from the onboarding modal. Only used on
-// a brand-new install where no FLIPORIUM_AUTHKEY env var was set and there's
-// no cached tsnet state yet. Subsequent launches won't hit this path because
-// tsnet caches its identity in <data>/tailscaled.state.
-func (a *App) SetAuthKey(key string) error {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return fmt.Errorf("invite key is empty")
-	}
-	a.mu.RLock()
-	st := a.state
-	a.mu.RUnlock()
-	if st != StateNeedsAuthKey {
-		return fmt.Errorf("not waiting for an invite key (state=%s)", st)
-	}
-	select {
-	case a.authKeyCh <- key:
-		return nil
-	default:
-		return fmt.Errorf("an auth key is already being processed")
-	}
-}
 
 // Status returns the current readiness state plus our own identity.
 func (a *App) Status() AppStatus {
@@ -988,35 +816,8 @@ func (a *App) ListPeers() ([]PeerInfo, error) {
 
 	byName := map[string]*PeerInfo{}
 
-	// Tailnet peer enumeration only applies to the legacy tsnet transport. On
-	// the WebRTC transport (a.srv == nil) peers come from the live hub +
-	// store roster below.
-	if a.srv != nil {
-		lc, err := a.srv.LocalClient()
-		if err == nil {
-			ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
-			st, err := lc.Status(ctx)
-			cancel()
-			if err == nil {
-				for _, p := range st.Peer {
-					name := p.HostName
-					if name == "" {
-						continue
-					}
-					if name == a.hostname {
-						continue
-					}
-					byName[name] = &PeerInfo{
-						Name:          name,
-						TailnetName:   strings.TrimSuffix(p.DNSName, "."),
-						IPs:           ipsAsStrings(p.TailscaleIPs),
-						TailnetOnline: p.Online,
-					}
-				}
-			}
-		}
-	}
-
+	// Peers come from the live hub (currently connected in this room) plus the
+	// store roster (people seen before).
 	// Merge in store roster (peers we've ever talked to, even if offline now).
 	if roster, err := a.store.Peers(a.ctx); err == nil {
 		for _, r := range roster {
@@ -1627,80 +1428,20 @@ func (a *App) BurnEverything(confirm string) error {
 		return fmt.Errorf("confirmation phrase mismatch (type exactly: burn everything)")
 	}
 	// Tear down running services so the data dir's files are unlocked.
+	if a.room != nil {
+		a.room.Close()
+	}
 	if a.hub != nil {
 		a.hub.ByeAll("burning")
-	}
-	if a.ln != nil {
-		a.ln.Close()
-	}
-	if a.srv != nil {
-		a.srv.Close()
 	}
 	if a.store != nil {
 		a.store.Close()
 	}
-	// Best-effort wipe. tailscaled may have left files we can't immediately
-	// delete on Windows due to handles still settling; the next launch will
-	// re-create whatever's missing anyway.
 	if err := os.RemoveAll(a.dataDir); err != nil {
 		log.Printf("burn: removeAll %s: %v", a.dataDir, err)
 	}
 	wailsruntime.Quit(a.ctx)
 	return nil
-}
-
-// inviteURL builds the fliporium.com/join URL for sharing a pre-auth key.
-// The key lives in the URL fragment (#k=...) which the browser never sends to
-// the server, so the website's access logs never see it.
-func inviteURL(authKey string) string {
-	return "https://fliporium.com/join#k=" + url.QueryEscape(authKey)
-}
-
-// GenerateInviteURL returns the shareable web URL that wraps the pre-auth
-// key. The friend opens it in a browser, sees a three-step walkthrough, and
-// gets a one-click copy of the key to paste into Fliporium's onboarding
-// modal on first launch.
-func (a *App) GenerateInviteURL(authKey string) (string, error) {
-	authKey = strings.TrimSpace(authKey)
-	if authKey == "" {
-		return "", fmt.Errorf("auth key required")
-	}
-	return inviteURL(authKey), nil
-}
-
-// GenerateInviteText returns a friendly multi-line invite the host can paste
-// into iMessage / Discord / email / wherever. Self-contained: includes the
-// download link and the key so the recipient doesn't need to be told
-// anything else.
-func (a *App) GenerateInviteText(authKey string) (string, error) {
-	authKey = strings.TrimSpace(authKey)
-	if authKey == "" {
-		return "", fmt.Errorf("auth key required")
-	}
-	return fmt.Sprintf(`Hi! Join my Fliporium tailnet:
-
-1. Download: https://fliporium.com/dl/fliporium.exe
-2. Run it. The first launch asks you to paste an invite key.
-3. Paste this one:
-
-%s
-
-You'll show up on my Floor as soon as you're connected.`, authKey), nil
-}
-
-// GenerateInviteQR renders the invite URL as a base64 PNG data URL. Scanning
-// the QR with a phone camera (or any QR reader) opens the /join page on
-// fliporium.com, where the recipient gets a copy-paste button for the key.
-func (a *App) GenerateInviteQR(authKey string) (string, error) {
-	authKey = strings.TrimSpace(authKey)
-	if authKey == "" {
-		return "", fmt.Errorf("auth key required")
-	}
-	png, err := qrcode.Encode(inviteURL(authKey), qrcode.Medium, 256)
-	if err != nil {
-		return "", err
-	}
-	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png), nil
 }
 
 // ---------- search ----------
@@ -1915,24 +1656,9 @@ func (a *App) EndShowtime(sessionID, boothID string) error {
 	return nil
 }
 
-// Connect dials a peer by tailnet hostname. The HELLO handshake makes them
-// appear in ListPeers as Connected=true.
-func (a *App) Connect(peerName string) error {
-	if a.hub == nil {
-		return fmt.Errorf("hub not ready")
-	}
-	if peerName == "" {
-		return fmt.Errorf("peer name required")
-	}
-	// On the WebRTC transport there's nothing to dial — the room mesh connects
-	// to every member automatically — so Connect is a no-op.
-	if a.srv == nil {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
-	defer cancel()
-	return a.hub.Dial(ctx, a.srv.Dial, a.tlsCfg, peerName, a.hostname)
-}
+// Connect is a no-op kept for frontend compatibility: in a room the mesh
+// connects to every member automatically, so there's nothing to dial.
+func (a *App) Connect(peerName string) error { return nil }
 
 // Disconnect closes the active connection to a peer (sending BYE if possible).
 func (a *App) Disconnect(peerName string) error {

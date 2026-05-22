@@ -1,14 +1,14 @@
-# Build both Fliporium binaries: the Wails GUI and the headless CLI.
-# Requires Go on PATH (or the user-scope install at ~/go-sdk/bin).
+# Build the Fliporium binaries: the Wails GUI (the product) and the signaling
+# server. Requires Go on PATH (or the user-scope install at ~/go-sdk/bin).
 #
 # Usage:
 #   .\build.ps1            # build both
 #   .\build.ps1 -Gui       # GUI only
-#   .\build.ps1 -Cli       # CLI only
+#   .\build.ps1 -Signal    # signaling server only
 
 param(
     [switch]$Gui,
-    [switch]$Cli
+    [switch]$Signal
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,7 +20,7 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-$buildAll = -not ($Gui -or $Cli)
+$buildAll = -not ($Gui -or $Signal)
 
 if ($Gui -or $buildAll) {
     Write-Host "Building fliporium.exe (Wails GUI)..." -ForegroundColor Cyan
@@ -31,11 +31,11 @@ if ($Gui -or $buildAll) {
     Write-Host ("  -> {0:F1} MB" -f ((Get-Item fliporium.exe).Length / 1MB)) -ForegroundColor Green
 }
 
-if ($Cli -or $buildAll) {
-    Write-Host "Building fliporium-cli.exe (terminal peer)..." -ForegroundColor Cyan
-    & go build -o fliporium-cli.exe ./cmd/fliporium-cli
-    if ($LASTEXITCODE -ne 0) { Write-Error "CLI build failed"; exit 1 }
-    Write-Host ("  -> {0:F1} MB" -f ((Get-Item fliporium-cli.exe).Length / 1MB)) -ForegroundColor Green
+if ($Signal -or $buildAll) {
+    Write-Host "Building flipsignal.exe (signaling server)..." -ForegroundColor Cyan
+    & go build -o flipsignal.exe ./cmd/flipsignal
+    if ($LASTEXITCODE -ne 0) { Write-Error "signaling build failed"; exit 1 }
+    Write-Host ("  -> {0:F1} MB" -f ((Get-Item flipsignal.exe).Length / 1MB)) -ForegroundColor Green
 }
 
 Write-Host "Done." -ForegroundColor Green
