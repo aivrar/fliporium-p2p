@@ -20,6 +20,12 @@ const (
 	// maxTotalConns bounds total concurrent signaling connections so a flood
 	// can't exhaust the process.
 	maxTotalConns = 5000
+	// Offline backlog: per-room ring buffer of encrypted message blobs so a
+	// peer who joins later sees recent history. The server stores ciphertext
+	// only and never decrypts.
+	maxBacklogPerRoom = 200
+	maxBlobBytes      = 64 * 1024
+	backlogTTL        = 14 * 24 * time.Hour
 )
 
 // Server is the signaling/matchmaking server. Clients join rooms over a
@@ -28,16 +34,69 @@ const (
 //
 // The logic lives here (not in package main) so it can be started in-process
 // by tests via Handler().
+type blob struct {
+	data string
+	at   time.Time
+}
+
 type Server struct {
-	mu    sync.Mutex
-	rooms map[string]map[string]*serverClient // roomID -> peerID -> client
-	total int                                 // concurrent connections across all rooms
+	mu      mutexWithBacklog
+	rooms   map[string]map[string]*serverClient // roomID -> peerID -> client
+	backlog map[string][]blob                   // roomID -> recent encrypted blobs
+	total   int                                 // concurrent connections across all rooms
 	// Verbose logs each relayed signal (handy for the proof; off by default).
 	Verbose bool
 }
 
+// mutexWithBacklog is just a sync.Mutex; the alias documents that it guards
+// both rooms and backlog.
+type mutexWithBacklog = sync.Mutex
+
 func NewServer() *Server {
-	return &Server{rooms: map[string]map[string]*serverClient{}}
+	return &Server{
+		rooms:   map[string]map[string]*serverClient{},
+		backlog: map[string][]blob{},
+	}
+}
+
+// store appends an encrypted blob to a room's backlog, pruning by count + TTL.
+func (s *Server) store(room, data string) {
+	if len(data) == 0 || len(data) > maxBlobBytes {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.backlog[room]
+	cur = append(cur, blob{data: data, at: time.Now()})
+	cur = pruneBlobs(cur)
+	s.backlog[room] = cur
+}
+
+// roomBacklog returns the live (non-expired) blobs for a room.
+func (s *Server) roomBacklog(room string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := pruneBlobs(s.backlog[room])
+	s.backlog[room] = cur
+	out := make([]string, len(cur))
+	for i, b := range cur {
+		out[i] = b.data
+	}
+	return out
+}
+
+func pruneBlobs(in []blob) []blob {
+	cutoff := time.Now().Add(-backlogTTL)
+	out := in[:0]
+	for _, b := range in {
+		if b.at.After(cutoff) {
+			out = append(out, b)
+		}
+	}
+	if len(out) > maxBacklogPerRoom {
+		out = out[len(out)-maxBacklogPerRoom:]
+	}
+	return out
 }
 
 type serverClient struct {
@@ -183,6 +242,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.logf("join: peer=%s room=%s (now %d members)", c.id, room, len(others)+1)
 
 	c.send(Sig{Type: SigPeers, Room: room, Peers: others})
+	// Hand the newcomer the room's encrypted backlog so they see recent
+	// history even if the senders are now offline.
+	if bl := s.roomBacklog(room); len(bl) > 0 {
+		c.send(Sig{Type: SigBacklog, Room: room, Blobs: bl})
+	}
 	s.broadcast(room, c.id, Sig{Type: SigPeerJoined, Room: room, From: c.id})
 
 	defer func() {
@@ -201,6 +265,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		case SigOffer, SigAnswer, SigICE:
 			s.logf("relay: %s %s->%s room=%s", m.Type, c.id, m.To, room)
 			s.relayTo(room, m.To, m)
+		case SigStore:
+			s.store(room, m.Blob)
 		}
 	}
 }

@@ -17,15 +17,23 @@ import (
 type Room struct {
 	sig  *SignalClient
 	self string
+	room string
 	stun []string
 
 	// OnPeer fires (in its own goroutine) when a DataChannel to remoteID opens.
 	OnPeer func(remoteID string, rwc io.ReadWriteCloser, initiator bool)
 	// OnPeerLeft fires when a remote leaves the room or its connection drops.
 	OnPeerLeft func(remoteID string)
+	// OnBacklog fires once on join with the room's stored encrypted blobs.
+	OnBacklog func(blobs []string)
 
 	mu    sync.Mutex
 	peers map[string]chan Sig // remoteID -> per-peer signaling inbox
+}
+
+// Store appends an encrypted blob to the room's offline backlog on the server.
+func (r *Room) Store(ctx context.Context, blob string) error {
+	return r.sig.Send(ctx, Sig{Type: SigStore, Room: r.room, Blob: blob})
 }
 
 // JoinRoom dials the signaling server and joins `room` as `self`.
@@ -37,6 +45,7 @@ func JoinRoom(ctx context.Context, signalURL, room, self string, stun []string) 
 	return &Room{
 		sig:   sig,
 		self:  self,
+		room:  room,
 		stun:  stun,
 		peers: map[string]chan Sig{},
 	}, nil
@@ -69,6 +78,10 @@ func (r *Room) Run(ctx context.Context) error {
 				r.route(ctx, m)
 			case SigPeerLeft:
 				r.dropPeer(m.From)
+			case SigBacklog:
+				if r.OnBacklog != nil && len(m.Blobs) > 0 {
+					r.OnBacklog(m.Blobs)
+				}
 			}
 		}
 	}

@@ -72,7 +72,7 @@ func TestWebRTCHubParity(t *testing.T) {
 	}
 
 	// Booth-scoped message bob -> alice.
-	if err := hb.SendBooth("alice", "booth-1", "in the booth"); err != nil {
+	if err := hb.SendBooth("alice", "booth-1", "in the booth", "booth-msg-uuid"); err != nil {
 		t.Fatalf("bob send booth: %v", err)
 	}
 	ev = waitEvent(t, ha, EventMessage, 10*time.Second)
@@ -175,6 +175,47 @@ func TestWebRTCKeyMismatch(t *testing.T) {
 	ev := waitEvent(t, hb, EventInfo, 10*time.Second)
 	if !strings.Contains(ev.Text, "decrypt") {
 		t.Fatalf("expected a decrypt failure, got info %q", ev.Text)
+	}
+}
+
+// TestWebRTCBacklogMessage proves offline delivery: a message stored while no
+// one else is in the room is replayed (decrypted) to a peer who joins later.
+func TestWebRTCBacklogMessage(t *testing.T) {
+	srv := httptest.NewServer(rtc.NewServer().Handler())
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var key [32]byte
+	copy(key[:], []byte("backlog-room-key-32-bytes-pad!!!"))
+
+	ha := NewHub()
+	ha.SetRoomKey(&key)
+	rA, err := ha.JoinRoom(ctx, wsURL, "bk", "alice", nil)
+	if err != nil {
+		t.Fatalf("alice join: %v", err)
+	}
+	// Alice posts while she's alone; it goes only to the encrypted backlog.
+	if err := ha.StoreMessage(ctx, rA, "alice", "uuid-1", "offline hi", "bk", time.Now().UTC()); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond) // let the server persist it
+
+	hb := NewHub()
+	hb.SetRoomKey(&key)
+	if _, err := hb.JoinRoom(ctx, wsURL, "bk", "bob", nil); err != nil {
+		t.Fatalf("bob join: %v", err)
+	}
+
+	ev := waitEvent(t, hb, EventMessage, 10*time.Second)
+	if ev.Text != "offline hi" {
+		t.Fatalf("bob backlog got %q, want %q", ev.Text, "offline hi")
+	}
+	d, ok := ev.Data.(*MessageEventData)
+	if !ok || !d.Backlog || d.UUID != "uuid-1" {
+		t.Fatalf("expected backlog message uuid-1, got %+v", ev.Data)
 	}
 }
 

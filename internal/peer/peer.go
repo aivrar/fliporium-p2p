@@ -135,6 +135,7 @@ type MessageEventData struct {
 	BoothID    string
 	UUID       string
 	ParentUUID string
+	Backlog    bool // true if replayed from the offline relay (dedupe by UUID)
 }
 
 // FlipEventData is the structured payload attached to Event Flip* events.
@@ -251,14 +252,14 @@ func (h *Hub) Send(peerName, text string) error {
 }
 
 // SendBooth queues a Booth-scoped MESSAGE to one specific connected peer.
-// The caller is responsible for iterating the Booth's members and calling
-// SendBooth for each one that's reachable.
-func (h *Hub) SendBooth(peerName, boothID, text string) error {
+// The caller iterates the Booth's reachable members; uuid lets receivers
+// dedupe (important once the same message can also arrive via the backlog).
+func (h *Hub) SendBooth(peerName, boothID, text, uuid string) error {
 	c := h.Get(peerName)
 	if c == nil {
 		return fmt.Errorf("no active connection to %q", peerName)
 	}
-	return c.WriteFrame(TypeMessage, Message{Text: text, At: time.Now().UTC(), BoothID: boothID})
+	return c.WriteFrame(TypeMessage, Message{UUID: uuid, Text: text, At: time.Now().UTC(), BoothID: boothID})
 }
 
 // SendBoothInvite hands a Booth's full state to one peer.

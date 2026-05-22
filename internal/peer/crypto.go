@@ -34,6 +34,36 @@ func sealBody(key *[32]byte, plain []byte) (json.RawMessage, error) {
 	return b, nil
 }
 
+// Seal encrypts plaintext under key and returns base64(nonce||ciphertext).
+// Used for offline-backlog blobs handed to the relay (which stores ciphertext
+// only and can never read them).
+func Seal(key *[32]byte, plain []byte) (string, error) {
+	var nonce [24]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	sealed := secretbox.Seal(nonce[:], plain, &nonce, key)
+	return base64.StdEncoding.EncodeToString(sealed), nil
+}
+
+// Open reverses Seal.
+func Open(key *[32]byte, b64 string) ([]byte, error) {
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) < 24 {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	var nonce [24]byte
+	copy(nonce[:], raw[:24])
+	plain, ok := secretbox.Open(nil, raw[24:], &nonce, key)
+	if !ok {
+		return nil, fmt.Errorf("decryption failed (wrong room key?)")
+	}
+	return plain, nil
+}
+
 // openBody reverses sealBody.
 func openBody(key *[32]byte, body json.RawMessage) ([]byte, error) {
 	var s string

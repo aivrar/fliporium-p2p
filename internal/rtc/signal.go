@@ -31,6 +31,8 @@ const (
 	SigOffer      = "offer"       // relayed SDP offer (From -> To)
 	SigAnswer     = "answer"      // relayed SDP answer (From -> To)
 	SigICE        = "ice"         // relayed trickle ICE candidate (From -> To)
+	SigStore      = "store"       // client -> server: append an encrypted blob to the room backlog
+	SigBacklog    = "backlog"     // server -> client: the room's stored encrypted blobs (on join)
 	SigError      = "error"       // server -> client: something went wrong
 )
 
@@ -43,6 +45,8 @@ type Sig struct {
 	Peers []string        `json:"peers,omitempty"` // membership (peers/peer-joined replies)
 	SDP   string          `json:"sdp,omitempty"`   // offer/answer
 	Cand  json.RawMessage `json:"cand,omitempty"`  // ICE candidate (webrtc.ICECandidateInit)
+	Blob  string          `json:"blob,omitempty"`  // store: one encrypted message blob
+	Blobs []string        `json:"blobs,omitempty"` // backlog: the room's stored encrypted blobs
 	Msg   string          `json:"msg,omitempty"`   // error detail
 }
 

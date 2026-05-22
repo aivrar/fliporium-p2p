@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	"fliporium/internal/rtc"
 )
@@ -67,8 +68,59 @@ func (h *Hub) JoinRoom(ctx context.Context, signalURL, roomID, selfName string, 
 			c.Close() // runLoop observes EOF → emits EventDisconnect + removes
 		}
 	}
+	// Drain the room's offline backlog: decrypt each stored blob with the room
+	// key and surface it as a normal message event (the app dedupes by UUID).
+	r.OnBacklog = func(blobs []string) {
+		key := h.currentKey()
+		if key == nil {
+			return
+		}
+		for _, b := range blobs {
+			plain, err := Open(key, b)
+			if err != nil {
+				continue
+			}
+			var bm backlogMsg
+			if json.Unmarshal(plain, &bm) != nil {
+				continue
+			}
+			h.emit(HubEvent{
+				Kind: EventMessage, Peer: bm.Sender, Text: bm.Text, At: bm.At,
+				Data: &MessageEventData{BoothID: bm.BoothID, UUID: bm.UUID, Backlog: true},
+			})
+		}
+	}
 	go func() { _ = r.Run(ctx) }()
 	return r, nil
+}
+
+// backlogMsg is the cleartext shape of an offline-backlog blob (sealed before
+// it leaves the device).
+type backlogMsg struct {
+	Sender  string    `json:"s"`
+	UUID    string    `json:"u"`
+	Text    string    `json:"t"`
+	BoothID string    `json:"b"`
+	At      time.Time `json:"at"`
+}
+
+// StoreMessage seals a room message and appends it to the room's offline
+// backlog so members who join later receive it. No-op if the room isn't
+// encrypted (no key) — we never hand the relay plaintext.
+func (h *Hub) StoreMessage(ctx context.Context, r *rtc.Room, sender, uuid, text, boothID string, at time.Time) error {
+	key := h.currentKey()
+	if key == nil || r == nil {
+		return nil
+	}
+	plain, err := json.Marshal(backlogMsg{Sender: sender, UUID: uuid, Text: text, BoothID: boothID, At: at})
+	if err != nil {
+		return err
+	}
+	blob, err := Seal(key, plain)
+	if err != nil {
+		return err
+	}
+	return r.Store(ctx, blob)
 }
 
 // RunWebRTC joins a room and blocks until ctx is cancelled, then leaves. A

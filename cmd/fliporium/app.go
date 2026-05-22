@@ -536,10 +536,23 @@ func (a *App) eventPump() {
 			boothID := ""
 			uuid := ""
 			parentUUID := ""
+			backlog := false
 			if md, ok := ev.Data.(*peer.MessageEventData); ok && md != nil {
 				boothID = md.BoothID
 				uuid = md.UUID
 				parentUUID = md.ParentUUID
+				backlog = md.Backlog
+			}
+			// Dedupe by UUID: a message can arrive both live and via the offline
+			// backlog, or twice from the mesh. If we already have it, skip.
+			if uuid != "" {
+				if _, err := a.store.FindMessageByUUID(a.ctx, uuid); err == nil {
+					continue
+				}
+			}
+			// Backlog messages we sent ourselves shouldn't reappear as inbound.
+			if backlog && ev.Peer == a.displayName() {
+				continue
 			}
 			_ = a.store.AppendMessageFull(a.ctx, store.Message{
 				UUID: uuid, Peer: ev.Peer, Direction: store.DirectionIn, Text: ev.Text, At: at, BoothID: boothID, ParentUUID: parentUUID,
@@ -553,14 +566,16 @@ func (a *App) eventPump() {
 				BoothID:    boothID,
 				ParentUUID: parentUUID,
 			})
-			// Twin relay: covers both 1:1 and booth messages.
-			a.relayToTwin(peer.TwinSyncMessage{
-				OriginalPeer: ev.Peer,
-				Direction:    store.DirectionIn,
-				Text:         ev.Text,
-				At:           at,
-				BoothID:      boothID,
-			})
+			// Twin relay: live messages only (not historical backlog replays).
+			if !backlog {
+				a.relayToTwin(peer.TwinSyncMessage{
+					OriginalPeer: ev.Peer,
+					Direction:    store.DirectionIn,
+					Text:         ev.Text,
+					At:           at,
+					BoothID:      boothID,
+				})
+			}
 		case peer.EventMessageReaction:
 			r, _ := ev.Data.(*peer.MessageReaction)
 			if r == nil {
@@ -1259,8 +1274,10 @@ func (a *App) SendBoothMessage(boothID, text string) error {
 		return err
 	}
 	now := time.Now().UTC()
-	var sendErrs []string
-	delivered := 0
+	uuid, err := newUUID()
+	if err != nil {
+		return err
+	}
 	for _, m := range members {
 		if m.PeerName == a.hostname {
 			continue
@@ -1268,23 +1285,32 @@ func (a *App) SendBoothMessage(boothID, text string) error {
 		if c := a.hub.Get(m.PeerName); c == nil {
 			continue
 		}
-		if err := a.hub.SendBooth(m.PeerName, boothID, text); err != nil {
-			sendErrs = append(sendErrs, m.PeerName+": "+err.Error())
-		} else {
-			delivered++
-		}
+		_ = a.hub.SendBooth(m.PeerName, boothID, text, uuid)
 	}
-	if err := a.store.AppendMessageBooth(a.ctx, a.hostname, store.DirectionOut, text, boothID, now); err != nil {
+	// Persist with a UUID and push the (encrypted) message to the room's
+	// offline backlog so members who join later still receive it.
+	if err := a.store.AppendMessageFull(a.ctx, store.Message{
+		UUID: uuid, Peer: a.hostname, Direction: store.DirectionOut, Text: text, BoothID: boothID, At: now,
+	}); err != nil {
 		log.Printf("append booth out: %v", err)
 	}
+	a.roomMu.Lock()
+	curRoom := a.room
+	isCurrent := boothID == a.currentRoomID
+	a.roomMu.Unlock()
+	if isCurrent && curRoom != nil {
+		if err := a.hub.StoreMessage(a.ctx, curRoom, a.displayName(), uuid, text, boothID, now); err != nil {
+			log.Printf("backlog store: %v", err)
+		}
+	}
 	wailsruntime.EventsEmit(a.ctx, "message", MessageRecord{
+		UUID:      uuid,
 		Peer:      a.hostname,
 		Direction: store.DirectionOut,
 		Text:      text,
 		At:        now.Format(time.RFC3339Nano),
 		BoothID:   boothID,
 	})
-	// Twin relay for booth messages too.
 	a.relayToTwin(peer.TwinSyncMessage{
 		OriginalPeer: a.hostname,
 		Direction:    store.DirectionOut,
@@ -1292,9 +1318,6 @@ func (a *App) SendBoothMessage(boothID, text string) error {
 		At:           now,
 		BoothID:      boothID,
 	})
-	if delivered == 0 && len(sendErrs) > 0 {
-		return fmt.Errorf("no peers reachable: %s", strings.Join(sendErrs, "; "))
-	}
 	return nil
 }
 
