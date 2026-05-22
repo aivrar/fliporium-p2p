@@ -668,6 +668,26 @@ func (s *Store) GetFlip(ctx context.Context, id string) (FlipRecord, error) {
 	return f, nil
 }
 
+// DeleteFlip removes a flip record (the local file is the caller's concern).
+func (s *Store) DeleteFlip(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM flips WHERE id = ?`, id)
+	return err
+}
+
+// DeleteMessageByID hard-deletes one message row from this device only (the
+// AFTER DELETE trigger keeps the search index in sync). Also clears its
+// reactions. This is a local "remove my copy", distinct from the tombstone
+// delete that propagates to peers.
+func (s *Store) DeleteMessageByID(ctx context.Context, id int64) error {
+	var uuid string
+	_ = s.db.QueryRowContext(ctx, `SELECT COALESCE(uuid,'') FROM messages WHERE id = ?`, id).Scan(&uuid)
+	if uuid != "" {
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM message_reactions WHERE message_uuid = ?`, uuid)
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE id = ?`, id)
+	return err
+}
+
 // Messages returns the last `limit` 1:1 messages with a given peer (booth_id is NULL).
 // limit <= 0 means "all".
 func (s *Store) Messages(ctx context.Context, peer string, limit int) ([]Message, error) {

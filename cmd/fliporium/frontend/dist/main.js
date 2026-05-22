@@ -279,8 +279,10 @@ function renderMessage(m, container) {
         tb.appendChild(button(m.pinned ? "📌" : "📍", m.pinned ? "unpin" : "pin", () => togglePin(m)));
         if (m.direction === "out") {
             tb.appendChild(button("✎", "edit", () => editMessageFlow(m)));
-            tb.appendChild(button("🗑", "delete", () => deleteMessageFlow(m)));
+            tb.appendChild(button("🗑", "delete for everyone", () => deleteMessageFlow(m)));
         }
+        // Available on ANY message (yours or theirs): drop your local copy.
+        tb.appendChild(button("✕", "remove from my device", () => removeMessageLocal(m)));
         li.appendChild(tb);
     }
 }
@@ -366,8 +368,43 @@ async function editMessageFlow(m) {
     catch (e) { toast("edit: " + e); }
 }
 
+// removeMessageLocal hard-deletes a message from THIS device only (any
+// message, received or sent). The other person keeps their copy.
+async function removeMessageLocal(m) {
+    if (!confirm("Remove this from your device? Your copy only — the other person keeps theirs. This can't be undone.")) return;
+    try {
+        await window.go.main.App.RemoveMessageLocally(m.id);
+        // Drop it from local state and refresh the view.
+        for (const list of state.msgsByPeer.values()) {
+            const i = list.findIndex(x => x.id === m.id);
+            if (i >= 0) list.splice(i, 1);
+        }
+        for (const list of state.msgsByBooth.values()) {
+            const i = list.findIndex(x => x.id === m.id);
+            if (i >= 0) list.splice(i, 1);
+        }
+        renderChat();
+    } catch (e) { toast("remove: " + e); }
+}
+
+// removeFlip removes a file transfer from THIS device. For received files it
+// also deletes the downloaded copy; for sent/parked files it just forgets the
+// record (your original is untouched).
+async function removeFlip(id, direction) {
+    const msg = direction === "in"
+        ? "Delete this file from your device? This removes your downloaded copy and can't be undone."
+        : "Remove this from the room? Your original file on disk is not touched.";
+    if (!confirm(msg)) return;
+    try {
+        await window.go.main.App.RemoveFlipLocally(id);
+        for (const m of state.flipsByPeer.values()) m.delete(id);
+        const card = document.querySelector(`[data-flip="${id}"]`);
+        if (card) card.remove();
+    } catch (e) { toast("remove: " + e); }
+}
+
 async function deleteMessageFlow(m) {
-    if (!confirm("Delete this message? Other people will see [deleted].")) return;
+    if (!confirm("Delete this message for everyone? They'll see [deleted].")) return;
     try { await window.go.main.App.DeleteMessage(m.uuid); }
     catch (e) { toast("delete: " + e); }
 }
@@ -450,6 +487,10 @@ function renderFlipCard(f, container) {
     const isMedia = f.mime && (f.mime.startsWith("video/") || f.mime.startsWith("audio/"));
     if (f.status === "complete" && isMedia && state.selection && state.selection.kind === "booth") {
         actions.push(`<button class="broadcast-btn" onclick="startShowtime('${escapeAttr(state.selection.key)}','${escapeAttr(f.id)}')">&#9654; broadcast</button>`);
+    }
+    // Remove-from-my-device: available on any finished/parked transfer.
+    if (f.status === "complete" || f.status === "queued" || f.status === "failed" || f.status === "cancelled") {
+        actions.push(`<button class="flip-remove" title="remove from my device" onclick="removeFlip('${escapeAttr(f.id)}','${escapeAttr(f.direction)}')">remove</button>`);
     }
 
     card.innerHTML = `

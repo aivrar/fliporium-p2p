@@ -1147,6 +1147,37 @@ func (a *App) DeleteMessage(uuid string) error {
 	return nil
 }
 
+// RemoveMessageLocally hard-deletes a message from THIS device only — any
+// message, yours or theirs, received or sent. It does not notify anyone; the
+// other person keeps their copy. For getting rid of something you don't want
+// on your own machine.
+func (a *App) RemoveMessageLocally(id int64) error {
+	if a.store == nil {
+		return fmt.Errorf("store not ready")
+	}
+	return a.store.DeleteMessageByID(a.ctx, id)
+}
+
+// RemoveFlipLocally removes a file transfer from THIS device. For files you
+// RECEIVED, it also deletes the caught copy from your catch folder (you said
+// you don't want it). For files you SENT or parked, it only forgets the record
+// — your original file on disk is never touched.
+func (a *App) RemoveFlipLocally(id string) error {
+	if a.store == nil {
+		return fmt.Errorf("store not ready")
+	}
+	f, err := a.store.GetFlip(a.ctx, id)
+	if err != nil {
+		return fmt.Errorf("no such file")
+	}
+	if f.Direction == store.DirectionIn && f.Path != "" {
+		if err := os.Remove(f.Path); err != nil && !os.IsNotExist(err) {
+			log.Printf("remove caught file %q: %v", f.Path, err)
+		}
+	}
+	return a.store.DeleteFlip(a.ctx, id)
+}
+
 // ToggleReaction toggles an emoji reaction by the local user on a message.
 // Returns the new state ("added" or "removed").
 func (a *App) ToggleReaction(messageUUID, emoji string) (string, error) {
