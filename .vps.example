@@ -1,0 +1,12 @@
+# Fliporium deploy credentials — used by deploy/deploy.sh.
+# Copy this file to ".vps" (which is gitignored) and fill in your own server.
+# NEVER commit the real .vps file.
+
+# Host or IP of the server running Caddy + flipsignal + flipstats (+ coturn).
+VPS_HOST=your-server.example.com
+
+# SSH user with sudo. Key-based SSH is assumed; see deploy/README.md.
+VPS_USER=youruser
+
+# That user's sudo password (used non-interactively by the install step).
+VPS_PASS=your-sudo-password

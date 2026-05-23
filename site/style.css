@@ -12,8 +12,8 @@
     --ink:         #f1f1ff;
     --ink-soft:    #d8dee9;
     --ink-muted:   #9aa0ad;
-    --purple:      #c9a7ff;
-    --purple-deep: #5b3aa3;
+    --purple:      #5cb2f2;
+    --purple-deep: #1d6fc0;
     --cream:       #fff5d1;
     --green:       #4ade80;
     --rule:        #2a2a36;
@@ -35,7 +35,7 @@
         --ink:         #1c1c24;
         --ink-soft:    #2a2a36;
         --ink-muted:   #6f7384;
-        --purple-deep: #4a2d8a;
+        --purple-deep: #155a9e;
         --rule:        #e6e2d4;
         --shadow:      0 12px 36px rgba(70, 40, 100, 0.08);
     }
@@ -64,7 +64,7 @@ a:hover { color: var(--cream); }
 code {
     font-family: var(--mono);
     font-size: 0.9em;
-    background: rgba(201, 167, 255, 0.12);
+    background: rgba(92, 178, 242, 0.12);
     padding: 1px 6px;
     border-radius: 4px;
     color: var(--purple);
@@ -112,13 +112,13 @@ code {
     position: absolute;
     inset: 0;
     background:
-        radial-gradient(ellipse at top, rgba(201, 167, 255, 0.10), transparent 60%),
+        radial-gradient(ellipse at top, rgba(92, 178, 242, 0.10), transparent 60%),
         repeating-linear-gradient(
             115deg,
             transparent 0,
             transparent 40px,
-            rgba(201, 167, 255, 0.025) 40px,
-            rgba(201, 167, 255, 0.025) 80px
+            rgba(92, 178, 242, 0.025) 40px,
+            rgba(92, 178, 242, 0.025) 80px
         );
     z-index: 0;
     pointer-events: none;
@@ -207,8 +207,8 @@ code {
 }
 .btn-primary {
     background: var(--purple);
-    color: #2a1a4a;
-    box-shadow: 0 8px 24px rgba(201, 167, 255, 0.35);
+    color: #0c2238;
+    box-shadow: 0 8px 24px rgba(92, 178, 242, 0.35);
 }
 .btn-primary:hover {
     background: var(--cream);
@@ -286,7 +286,7 @@ section p {
     transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 .feature:hover {
-    border-color: rgba(201, 167, 255, 0.4);
+    border-color: rgba(92, 178, 242, 0.4);
     transform: translateY(-2px);
     box-shadow: var(--shadow);
 }
@@ -302,6 +302,14 @@ section p {
     color: var(--ink-muted);
     margin: 0;
     max-width: none;
+}
+.features-more {
+    margin: 32px auto 0;
+    max-width: 760px;
+    text-align: center;
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--ink-muted);
 }
 
 /* ============== privacy promise + quickstart ============== */
@@ -341,7 +349,7 @@ section p {
     height: 38px;
     border-radius: 50%;
     background: var(--purple);
-    color: #2a1a4a;
+    color: #0c2238;
     font-family: var(--serif);
     font-weight: 700;
     font-size: 20px;
@@ -448,10 +456,16 @@ section p {
     margin: 20px 0;
     padding: 14px 22px;
     border-left: 3px solid var(--purple);
-    background: rgba(201, 167, 255, 0.06);
+    background: rgba(92, 178, 242, 0.06);
     color: var(--ink-soft);
     font-style: italic;
     border-radius: 0 8px 8px 0;
+}
+.doc-foot-cta {
+    margin-top: 40px;
+    padding-top: 22px;
+    border-top: 1px solid var(--rule);
+    color: var(--ink-soft);
 }
 .doc dl { margin: 0; }
 .doc dt {

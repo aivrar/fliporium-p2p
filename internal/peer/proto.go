@@ -33,11 +33,6 @@ const (
 	// Booths = multi-peer named chat rooms (v0.6).
 	TypeBoothInvite MessageType = "BOOTH_INVITE"
 
-	// Showtime = synchronized media playback in a booth (v0.7).
-	TypeShowtimeStart MessageType = "SHOWTIME_START"
-	TypeShowtimeState MessageType = "SHOWTIME_STATE"
-	TypeShowtimeEnd   MessageType = "SHOWTIME_END"
-
 	// Twin Mode (v0.9): one Fliporium instance relays its own 1:1 chat
 	// history to a paired sibling instance owned by the same user.
 	TypeTwinSyncMessage MessageType = "TWIN_SYNC_MESSAGE"
@@ -50,6 +45,16 @@ const (
 
 	// Round 5: rough presence broadcast.
 	TypePeerStatus MessageType = "PEER_STATUS"
+
+	// Round 14: link unfurling. The sender unfurls a link in a message it sent
+	// (only the sender's device contacts the third-party site), then hands the
+	// resulting card to recipients so their devices never touch the link.
+	TypeMessageCard MessageType = "MESSAGE_CARD"
+
+	// Round 15: identity proof. After HELLO, each side signs the other's nonce
+	// with its Ed25519 key, proving it owns the key the routing id is derived
+	// from. Without this, a peer could claim anyone's id and impersonate them.
+	TypeAuth MessageType = "AUTH"
 )
 
 type Envelope struct {
@@ -61,6 +66,16 @@ type Hello struct {
 	Name        string `json:"name"`
 	Version     string `json:"version"`
 	DisplayName string `json:"displayName,omitempty"` // friendly label; routing still keys on Name
+	Avatar      string `json:"avatar,omitempty"`      // small self-contained data: URI (downscaled square JPEG), like DisplayName
+	PubKey      []byte `json:"pubkey,omitempty"`      // Ed25519 public key the routing id is derived from
+	Nonce       []byte `json:"nonce,omitempty"`       // fresh challenge the peer must sign to prove key ownership
+}
+
+// Auth proves identity: Sig is the sender's Ed25519 signature over the nonce
+// the *other* side sent in its HELLO. Verifying it (against the HELLO PubKey,
+// whose fingerprint must equal the claimed routing id) prevents impersonation.
+type Auth struct {
+	Sig []byte `json:"sig"`
 }
 
 type Message struct {
@@ -116,46 +131,46 @@ type PeerStatus struct {
 	At     time.Time `json:"at"`
 }
 
+// LinkCard is an unfurled preview of a URL found in a message. The sender's
+// device fetches the metadata (so only the sender ever contacts the link's
+// host); Image is a small self-contained data: URI (a downscaled JPEG) so
+// recipients render the thumbnail without reaching out to anyone. The JSON
+// field names double as the shape the frontend consumes.
+type LinkCard struct {
+	URL         string `json:"url"`
+	Kind        string `json:"kind"`                  // "link" | "youtube"
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Image       string `json:"image,omitempty"`       // data: URI thumbnail (already downscaled)
+	SiteName    string `json:"siteName,omitempty"`
+	VideoID     string `json:"videoId,omitempty"`     // YouTube id, for click-to-load embed
+}
+
+// MessageCard attaches an unfurled LinkCard to a previously-sent message.
+// Honored only when it arrives from the message's original sender (same check
+// as MessageEdit).
+type MessageCard struct {
+	MessageUUID string   `json:"message_uuid"`
+	BoothID     string   `json:"booth_id,omitempty"`
+	Card        LinkCard `json:"card"`
+}
+
 // BoothInvite seeds the recipient's local copy of a Booth.
 // The sender is always one of the members.
+//
+// Secret carries the booth's end-to-end room key so the recipient can actually
+// join the encrypted mesh without a separately-pasted invite link. It only
+// rides this envelope, which travels over the already-authenticated +
+// E2E-encrypted P2P channel to a single verified peer — the signaling server
+// never sees it. Empty Secret means "metadata only" (legacy/group reshare).
 type BoothInvite struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Founder   string    `json:"founder"`
 	Members   []string  `json:"members"`
 	Motto     string    `json:"motto,omitempty"`
+	Secret    string    `json:"secret,omitempty"`
 	FoundedAt time.Time `json:"founded_at"`
-}
-
-// ShowtimeStart announces a new synchronized playback session in a booth.
-// FlipID references a file that's already been flipped to every viewer
-// (use booth-flip to seed it first). Leader is the peer hostname of whoever
-// is broadcasting playback.
-type ShowtimeStart struct {
-	SessionID string    `json:"session_id"`
-	BoothID   string    `json:"booth_id"`
-	FlipID    string    `json:"flip_id"`
-	Leader    string    `json:"leader"`
-	Filename  string    `json:"filename,omitempty"` // hint for receivers that lack the flip
-	Mime      string    `json:"mime,omitempty"`
-	At        time.Time `json:"at"`
-}
-
-// ShowtimeState is the periodic + on-event sync update from the leader.
-// Position is the media currentTime in seconds.
-type ShowtimeState struct {
-	SessionID string    `json:"session_id"`
-	BoothID   string    `json:"booth_id"`
-	Playing   bool      `json:"playing"`
-	Position  float64   `json:"position"`
-	At        time.Time `json:"at"`
-}
-
-// ShowtimeEnd closes a session.
-type ShowtimeEnd struct {
-	SessionID string    `json:"session_id"`
-	BoothID   string    `json:"booth_id"`
-	At        time.Time `json:"at"`
 }
 
 // TwinSyncMessage is one 1:1 chat row relayed from one of a user's devices
@@ -182,6 +197,7 @@ type FlipStart struct {
 	Filename string `json:"filename"` // basename only; receiver decides path
 	Size     int64  `json:"size"`     // bytes
 	Mime     string `json:"mime,omitempty"`
+	BoothID  string `json:"booth_id,omitempty"` // conversation scope; "" = 1:1 (keeps files from leaking across rooms that share a member)
 }
 
 // FlipChunk carries up to ChunkSize bytes of file data.

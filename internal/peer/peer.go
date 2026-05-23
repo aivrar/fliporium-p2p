@@ -1,74 +1,30 @@
-// Peer transport: a TLS-wrapped TCP connection over the tailnet,
-// with a HELLO handshake. The TLS layer is self-signed and unverified at
-// the X509 layer because peer identity is already established by the
-// underlying Tailscale (WireGuard) transport — TLS here is defense in
-// depth plus the brief's "TLS-wrapped TCP" wording.
+// Peer hub: the transport-agnostic protocol layer. A PeerConn wraps any
+// io.ReadWriteCloser (today a detached WebRTC DataChannel) and runLoop
+// dispatches the length-prefixed JSON envelopes to Hub events. The WebRTC
+// signaling/handshake wiring lives in webrtc.go; this file is the Hub,
+// PeerConn, and the protocol dispatch loop.
 package peer
 
 import (
-	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/big"
-	"net"
 	"sync"
 	"time"
 )
 
-// Port is the fixed TCP port the Fliporium peer protocol listens on.
-const Port = 41642
-
-// NewTLSConfig produces a fresh in-memory TLS config with a self-signed cert.
-// Both server and client sides use InsecureSkipVerify because we trust the
-// Tailscale layer for peer authentication.
-func NewTLSConfig(hostname string) (*tls.Config, error) {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("gen key: %w", err)
-	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, fmt.Errorf("gen serial: %w", err)
-	}
-	tmpl := x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: hostname, Organization: []string{"fliporium"}},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		BasicConstraintsValid: true,
-		DNSNames:              []string{hostname},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)
-	if err != nil {
-		return nil, fmt.Errorf("create cert: %w", err)
-	}
-	return &tls.Config{
-		Certificates:       []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: priv}},
-		InsecureSkipVerify: true,
-		MinVersion:         tls.VersionTLS13,
-	}, nil
-}
-
 // PeerConn is one live peer connection after the HELLO handshake. The
-// transport is any io.ReadWriteCloser: a TLS-over-tailnet net.Conn (legacy)
-// or a detached WebRTC DataChannel — runLoop/WriteFrame/Close only need
-// Read/Write/Close, so the same machinery serves both.
+// transport is any io.ReadWriteCloser (a detached WebRTC DataChannel):
+// runLoop/WriteFrame/Close only need Read/Write/Close.
 type PeerConn struct {
 	Name    string // remote's stable routing id (the HELLO Name)
 	Display string // remote's friendly display name (the HELLO DisplayName)
+	Avatar  string // remote's avatar data URI (the HELLO Avatar), validated
 	Addr    string // remote net address for logging
 	Version string // remote protocol version
 	conn    io.ReadWriteCloser
-	key     *[32]byte // room key; nil = no encryption (e.g. plaintext HELLO bootstrap)
+	key     *[32]byte  // room key; nil = no encryption (e.g. plaintext HELLO bootstrap)
 	mu      sync.Mutex // serializes writes
 	closeMu sync.Mutex
 	closed  bool
@@ -115,10 +71,6 @@ const (
 	EventFlipFailed    HubEventKind = "flip-failed"
 	EventBoothInvited  HubEventKind = "booth-invited"
 
-	EventShowtimeStarted HubEventKind = "showtime-started"
-	EventShowtimeState   HubEventKind = "showtime-state"
-	EventShowtimeEnded   HubEventKind = "showtime-ended"
-
 	EventTwinSyncedMessage HubEventKind = "twin-synced-message"
 
 	EventMessageReaction HubEventKind = "message-reaction"
@@ -126,6 +78,7 @@ const (
 	EventMessageDelete   HubEventKind = "message-delete"
 	EventMessagePin      HubEventKind = "message-pin"
 	EventPeerStatus      HubEventKind = "peer-status"
+	EventMessageCard     HubEventKind = "message-card"
 )
 
 // MessageEventData accompanies EventMessage so the app layer can route by Booth
@@ -148,6 +101,7 @@ type FlipEventData struct {
 	Bytes     int64  // total transferred so far
 	Sha256    string
 	Reason    string // for FlipFailed
+	BoothID   string // conversation scope; "" = 1:1
 }
 
 // HubEvent is a single async event to surface to the UI.
@@ -155,6 +109,7 @@ type HubEvent struct {
 	Kind    HubEventKind
 	Peer    string
 	Display string // friendly name of Peer ("" if unknown)
+	Avatar  string // avatar data URI of Peer ("" if unknown); set on EventConnect
 	Text    string
 	Data    any // typed payload (e.g. *FlipEventData)
 	At      time.Time
@@ -174,6 +129,14 @@ type Hub struct {
 	keyMu       sync.Mutex
 	roomKey     *[32]byte // current room's E2E key; new PeerConns inherit it
 	selfDisplay string    // our own friendly name, announced in HELLO
+	selfAvatar  string    // our own avatar data URI, announced in HELLO
+
+	blockMu sync.Mutex
+	blocked map[string]bool // peer ids we refuse to connect to (client-side block)
+
+	idMu    sync.Mutex
+	privKey ed25519.PrivateKey // for signing the peer-auth challenge
+	pubKey  ed25519.PublicKey
 
 	flipMu   sync.Mutex
 	inFlips  map[string]*incomingFlip
@@ -194,6 +157,57 @@ func (h *Hub) selfDisp() string {
 	return h.selfDisplay
 }
 
+// SetSelfAvatar sets the small avatar data URI announced to peers in the HELLO
+// handshake. Like the display name, peers pick up changes on their next
+// (re)connect. Pass "" to announce no avatar.
+func (h *Hub) SetSelfAvatar(uri string) {
+	h.keyMu.Lock()
+	h.selfAvatar = uri
+	h.keyMu.Unlock()
+}
+
+func (h *Hub) selfAv() string {
+	h.keyMu.Lock()
+	defer h.keyMu.Unlock()
+	return h.selfAvatar
+}
+
+// SetBlocked replaces the set of peer ids this hub refuses to connect to.
+// Applied at the HELLO handshake (AttachDataChannel) so a blocked peer never
+// becomes a live connection.
+func (h *Hub) SetBlocked(ids []string) {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	h.blockMu.Lock()
+	h.blocked = m
+	h.blockMu.Unlock()
+}
+
+// IsBlocked reports whether a peer id is on this hub's blocklist.
+func (h *Hub) IsBlocked(name string) bool {
+	h.blockMu.Lock()
+	defer h.blockMu.Unlock()
+	return h.blocked[name]
+}
+
+// SetIdentity gives the hub the Ed25519 keypair used to prove identity in the
+// peer handshake. Set before connecting. If unset, the hub doesn't present a
+// key (used by tests/dev with non-"fp-" names, where proof isn't enforced).
+func (h *Hub) SetIdentity(priv ed25519.PrivateKey, pub ed25519.PublicKey) {
+	h.idMu.Lock()
+	h.privKey = priv
+	h.pubKey = pub
+	h.idMu.Unlock()
+}
+
+func (h *Hub) identity() (ed25519.PrivateKey, ed25519.PublicKey) {
+	h.idMu.Lock()
+	defer h.idMu.Unlock()
+	return h.privKey, h.pubKey
+}
+
 // SetRoomKey sets the E2E key applied to peers that connect from now on. Pass
 // nil to disable encryption (e.g. when leaving a room). Existing connections
 // keep whatever key they were created with.
@@ -212,7 +226,7 @@ func (h *Hub) currentKey() *[32]byte {
 func NewHub() *Hub {
 	return &Hub{
 		conns:    map[string]*PeerConn{},
-		Events:   make(chan HubEvent, 64),
+		Events:   make(chan HubEvent, 256),
 		inFlips:  map[string]*incomingFlip{},
 		outFlips: map[string]*outgoingFlip{},
 	}
@@ -269,12 +283,12 @@ func (h *Hub) Send(peerName, text string) error {
 // SendBooth queues a Booth-scoped MESSAGE to one specific connected peer.
 // The caller iterates the Booth's reachable members; uuid lets receivers
 // dedupe (important once the same message can also arrive via the backlog).
-func (h *Hub) SendBooth(peerName, boothID, text, uuid string) error {
+func (h *Hub) SendBooth(peerName, boothID, text, uuid, parentUUID string) error {
 	c := h.Get(peerName)
 	if c == nil {
 		return fmt.Errorf("no active connection to %q", peerName)
 	}
-	return c.WriteFrame(TypeMessage, Message{UUID: uuid, Text: text, At: time.Now().UTC(), BoothID: boothID})
+	return c.WriteFrame(TypeMessage, Message{UUID: uuid, Text: text, At: time.Now().UTC(), BoothID: boothID, ParentUUID: parentUUID})
 }
 
 // SendBoothInvite hands a Booth's full state to one peer.
@@ -285,34 +299,6 @@ func (h *Hub) SendBoothInvite(peerName string, inv BoothInvite) error {
 	}
 	return c.WriteFrame(TypeBoothInvite, inv)
 }
-
-// SendShowtimeStart broadcasts a SHOWTIME_START to one peer.
-func (h *Hub) SendShowtimeStart(peerName string, s ShowtimeStart) error {
-	c := h.Get(peerName)
-	if c == nil {
-		return fmt.Errorf("no active connection to %q", peerName)
-	}
-	return c.WriteFrame(TypeShowtimeStart, s)
-}
-
-// SendShowtimeState broadcasts a SHOWTIME_STATE to one peer.
-func (h *Hub) SendShowtimeState(peerName string, s ShowtimeState) error {
-	c := h.Get(peerName)
-	if c == nil {
-		return fmt.Errorf("no active connection to %q", peerName)
-	}
-	return c.WriteFrame(TypeShowtimeState, s)
-}
-
-// SendShowtimeEnd broadcasts a SHOWTIME_END to one peer.
-func (h *Hub) SendShowtimeEnd(peerName string, s ShowtimeEnd) error {
-	c := h.Get(peerName)
-	if c == nil {
-		return fmt.Errorf("no active connection to %q", peerName)
-	}
-	return c.WriteFrame(TypeShowtimeEnd, s)
-}
-
 
 // SendTwinSyncMessage sends a 1:1 message relay to a paired twin.
 func (h *Hub) SendTwinSyncMessage(peerName string, m TwinSyncMessage) error {
@@ -357,6 +343,16 @@ func (h *Hub) SendMessagePin(peerName string, p MessagePin) error {
 		return fmt.Errorf("no active connection to %q", peerName)
 	}
 	return c.WriteFrame(TypeMessagePin, p)
+}
+
+// SendMessageCard hands an unfurled link card for a previously-sent message
+// to one peer.
+func (h *Hub) SendMessageCard(peerName string, mc MessageCard) error {
+	c := h.Get(peerName)
+	if c == nil {
+		return fmt.Errorf("no active connection to %q", peerName)
+	}
+	return c.WriteFrame(TypeMessageCard, mc)
 }
 
 // SendPeerStatus advertises a presence state change to one peer.
@@ -475,21 +471,6 @@ func (h *Hub) runLoop(c *PeerConn) {
 			if err := json.Unmarshal(body, &inv); err == nil {
 				h.emit(HubEvent{Kind: EventBoothInvited, Peer: c.Name, Text: inv.Name, Data: &inv})
 			}
-		case TypeShowtimeStart:
-			var s ShowtimeStart
-			if err := json.Unmarshal(body, &s); err == nil {
-				h.emit(HubEvent{Kind: EventShowtimeStarted, Peer: c.Name, Text: s.FlipID, Data: &s})
-			}
-		case TypeShowtimeState:
-			var s ShowtimeState
-			if err := json.Unmarshal(body, &s); err == nil {
-				h.emit(HubEvent{Kind: EventShowtimeState, Peer: c.Name, Data: &s})
-			}
-		case TypeShowtimeEnd:
-			var s ShowtimeEnd
-			if err := json.Unmarshal(body, &s); err == nil {
-				h.emit(HubEvent{Kind: EventShowtimeEnded, Peer: c.Name, Data: &s})
-			}
 		case TypeTwinSyncMessage:
 			var t TwinSyncMessage
 			if err := json.Unmarshal(body, &t); err == nil {
@@ -520,82 +501,11 @@ func (h *Hub) runLoop(c *PeerConn) {
 			if err := json.Unmarshal(body, &s); err == nil {
 				h.emit(HubEvent{Kind: EventPeerStatus, Peer: c.Name, Text: s.Status, Data: &s})
 			}
+		case TypeMessageCard:
+			var mc MessageCard
+			if err := json.Unmarshal(body, &mc); err == nil {
+				h.emit(HubEvent{Kind: EventMessageCard, Peer: c.Name, Data: &mc})
+			}
 		}
 	}
-}
-
-// Accept welcomes a new inbound conn: TLS handshake, exchange HELLO, register.
-func (h *Hub) Accept(ctx context.Context, raw net.Conn, tlsCfg *tls.Config, selfName string) {
-	tlsConn := tls.Server(raw, tlsCfg)
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		raw.Close()
-		h.emit(HubEvent{Kind: EventInfo, Text: "inbound tls handshake failed: " + err.Error()})
-		return
-	}
-	env, err := ReadFrame(tlsConn)
-	if err != nil || env.Type != TypeHello {
-		tlsConn.Close()
-		h.emit(HubEvent{Kind: EventInfo, Text: "inbound HELLO missing or malformed"})
-		return
-	}
-	var remote Hello
-	if err := json.Unmarshal(env.Body, &remote); err != nil {
-		tlsConn.Close()
-		return
-	}
-	if err := WriteFrame(tlsConn, TypeHello, Hello{Name: selfName, Version: ProtocolVersion}); err != nil {
-		tlsConn.Close()
-		return
-	}
-	pc := &PeerConn{
-		Name:    remote.Name,
-		Addr:    raw.RemoteAddr().String(),
-		Version: remote.Version,
-		conn:    tlsConn,
-	}
-	h.add(pc)
-	h.emit(HubEvent{Kind: EventConnect, Peer: pc.Name, Text: "inbound from " + pc.Addr})
-	go h.runLoop(pc)
-}
-
-// Dial connects out: TLS handshake, exchange HELLO, register.
-func (h *Hub) Dial(ctx context.Context, dial func(ctx context.Context, network, addr string) (net.Conn, error), tlsCfg *tls.Config, target, selfName string) error {
-	addr := fmt.Sprintf("%s:%d", target, Port)
-	raw, err := dial(ctx, "tcp", addr)
-	if err != nil {
-		return fmt.Errorf("dial %s: %w", addr, err)
-	}
-	tlsConn := tls.Client(raw, tlsCfg)
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		raw.Close()
-		return fmt.Errorf("tls handshake to %s: %w", addr, err)
-	}
-	if err := WriteFrame(tlsConn, TypeHello, Hello{Name: selfName, Version: ProtocolVersion}); err != nil {
-		tlsConn.Close()
-		return fmt.Errorf("send HELLO: %w", err)
-	}
-	env, err := ReadFrame(tlsConn)
-	if err != nil {
-		tlsConn.Close()
-		return fmt.Errorf("receive HELLO: %w", err)
-	}
-	if env.Type != TypeHello {
-		tlsConn.Close()
-		return fmt.Errorf("expected HELLO, got %q", env.Type)
-	}
-	var remote Hello
-	if err := json.Unmarshal(env.Body, &remote); err != nil {
-		tlsConn.Close()
-		return fmt.Errorf("decode HELLO: %w", err)
-	}
-	pc := &PeerConn{
-		Name:    remote.Name,
-		Addr:    addr,
-		Version: remote.Version,
-		conn:    tlsConn,
-	}
-	h.add(pc)
-	h.emit(HubEvent{Kind: EventConnect, Peer: pc.Name, Text: "outbound to " + addr})
-	go h.runLoop(pc)
-	return nil
 }

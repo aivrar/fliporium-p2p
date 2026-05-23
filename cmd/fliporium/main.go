@@ -1,8 +1,10 @@
-// fliporium is the Phase 4 Wails desktop binary: a real Windows window
-// (WebView2 under the hood) showing The Floor, the peer list, and a 1:1
-// chat pane with SQLite-backed history and basic Markdown rendering.
+// fliporium is the Wails desktop binary: a real Windows window (WebView2 under
+// the hood) showing The Floor, the room/peer list, and chat with SQLite-backed
+// history and Markdown rendering.
 //
-// Configuration is the same as the CLI (FLIPORIUM_AUTHKEY, _HOSTNAME, _DIR).
+// Environment: FLIPORIUM_DIR overrides the data/identity directory;
+// FLIPORIUM_HOSTNAME overrides the routing id (normally the install's stable
+// Ed25519 fingerprint).
 package main
 
 import (
@@ -73,15 +75,19 @@ func main() {
 		Height:    750,
 		MinWidth:  720,
 		MinHeight: 480,
+		// Frameless: Windows won't draw its own (uncolorable, on Win10) title
+		// bar; our own #topbar becomes the draggable title bar instead, with
+		// custom window controls in the frontend.
+		Frameless: true,
 		AssetServer: &assetserver.Options{
 			Assets:  distFS,
 			Handler: http.HandlerFunc(app.catchHandler),
 		},
-		BackgroundColour: &options.RGBA{R: 18, G: 18, B: 22, A: 1},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
-		Logger:           logger.NewFileLogger(filepath.Join(dir, "wails.log")),
-		LogLevel:         logger.DEBUG,
+		BackgroundColour:   &options.RGBA{R: 18, G: 18, B: 22, A: 1},
+		OnStartup:          app.startup,
+		OnShutdown:         app.shutdown,
+		Logger:             logger.NewFileLogger(filepath.Join(dir, "wails.log")),
+		LogLevel:           logger.DEBUG,
 		LogLevelProduction: logger.DEBUG,
 		Bind: []interface{}{
 			app,

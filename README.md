@@ -1,179 +1,200 @@
-# Fliporium
+<p align="center">
+  <img src="github_image.PNG" alt="Fliporium — private peer-to-peer chat and file sharing for Windows" width="420">
+</p>
 
-A portable Windows desktop app for small private groups, built on a self-hosted
-Headscale tailnet. See `fliporium-brief.md` for the full vision.
+<h1 align="center">Fliporium</h1>
 
-## Status
+<p align="center">
+  <strong>Private peer-to-peer chat &amp; file sharing for Windows</strong> — end-to-end encrypted,<br>
+  no account, no servers in the middle. Just you and your people.
+</p>
 
-| Phase | What | State |
-| ----- | ---- | ----- |
-| 1 | Headscale + Caddy on the GoDaddy VPS at `headscale.fliporium.com` | done |
-| 2 | tsnet-backed Go binary joins the tailnet, persists identity | done |
-| 3 | Terminal P2P chat (HELLO/MESSAGE/BYE over TLS-on-tsnet) | done |
-| 4 | Wails desktop UI: The Floor, peer list, 1:1 chat, SQLite history, basic Markdown | done (alpha) |
-| 5 | File flipping + Catch folder + inline image/video/audio/pdf/text viewers | done v0.1 (no resumability, no multi-file, no folder flips) |
-| 6 | Booths (named multi-peer group chat) + mesh fan-out + GUI/CLI surfaces | done v0.1 (no reactions/edit/delete/threads/themes/emoji/search) |
-| 7 | Showtime: watch-parties / listening-rooms with synced HTML5 playback (leader-led) | done v0.1 wire-level (visual confirmation pending; no voice/video/screen) |
-| 8 | Workshop: one shared notepad per booth, last-write-wins | done v0.1 (no real-time cursors / CRDT, no whiteboard / playlist / lists / calendar / mini-games) |
-| 9 | Twin Mode: pair two of your own instances, 1:1 chat history relays both ways | done v0.1 (1:1 only, no booth/flip sync, manual hostname pairing) |
-| 10 | Polish: first-launch tour, Backstage settings panel, light theme, notification chime, confetti on first connect | done v0.1 (no QR invites, landing page, "burn everything", alt themes, Marquee, easter eggs) |
+<p align="center">
+  <a href="https://fliporium.com/dl/fliporium.exe"><strong>⬇&nbsp;Download for Windows</strong></a> ·
+  <a href="https://fliporium.com">Website</a> ·
+  <a href="https://fliporium.com/docs">Docs</a> ·
+  <a href="https://fliporium.com/privacy">Privacy</a>
+</p>
+
+<p align="center">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
+  <img alt="Platform: Windows 10 and 11" src="https://img.shields.io/badge/platform-Windows%2010%20%26%2011-0078D6">
+  <img alt="Made with Go, Wails, WebRTC" src="https://img.shields.io/badge/made%20with-Go%20%2B%20Wails%20%2B%20WebRTC-00ADD8">
+</p>
+
+---
+
+[Fliporium](https://fliporium.com) is a portable Windows desktop app for chatting and
+sharing files with a small, private group — peer-to-peer over WebRTC, end-to-end
+encrypted, with no account and no central content server.
+
+You download one `.exe`, create a room, and share its invite link. Whoever has
+the link connects directly to you over a WebRTC mesh, and messages and files
+flow device-to-device. A small coordination server introduces peers and relays
+the encrypted handshake; it never sees message content.
+
+## How it works
+
+- **Transport** — [pion/webrtc](https://github.com/pion/webrtc) DataChannels in
+  a full mesh (capped at 16 peers per room). Every feature — chat, file
+  transfer, reactions, presence — rides the same length-prefixed JSON envelope
+  protocol over the channel.
+- **Coordination** — a small Go signaling server (`flipsignal`) over WebSocket
+  handles matchmaking, relays the WebRTC SDP/ICE handshake, holds an encrypted
+  offline backlog, and mints short-lived TURN credentials. It never sees
+  plaintext.
+- **NAT traversal** — STUN for hole-punching, with a coturn TURN relay as an
+  encrypted fallback for restrictive networks.
+- **Identity** — an Ed25519 keypair generated on first launch. The routing id is
+  the key's fingerprint (`fp-…`); a signed challenge during the handshake proves
+  key ownership, which is what prevents impersonation. No signup.
+- **Encryption** — each room has a 32-byte NaCl secretbox key carried in the
+  invite link's URL fragment (after `#`), which browsers never send to a server.
+  Message bodies and offline-backlog blobs are sealed with it, so the signaling
+  and TURN servers only ever handle ciphertext.
+- **Storage** — local SQLite (`modernc.org/sqlite`, pure Go, no cgo) with FTS5
+  full-text search. Identity, history, and caught files all live in the data dir
+  next to the `.exe`.
+- **UI** — [Wails v2](https://wails.io) (WebView2) with a plain HTML/CSS/JS
+  frontend embedded via `//go:embed` — no JavaScript build chain.
+
+## Features
+
+- **Rooms** — invite-link group spaces, 1:1 chat, and private DMs handed
+  peer-to-peer over the encrypted link.
+- **Messages** — Markdown, replies, emoji reactions, edit, delete-for-everyone,
+  pin, and link/YouTube preview cards (unfurled by the sender only, so
+  recipients never contact the link).
+- **File "flips"** — drag-and-drop or file picker, fan-out to a whole room,
+  paste images; inline previews for images, video, audio, PDF, and text/code.
+- **Offline delivery** — messages sent while a peer is away wait (encrypted) on
+  the server and arrive when they reconnect.
+- **Search** — full-text across all local history.
+- **Presence** — active / idle / away.
+- **Twin Mode** — pair two of your own devices so 1:1 history stays in sync.
+- **Backstage** — display name and avatar, dark/light theme, notification chime,
+  a per-identity block list, and a "burn everything" local wipe.
 
 ## Layout
 
 ```
 cmd/
-  fliporium/        Wails desktop binary (Go + embedded frontend)
-    main.go         entry point
-    app.go          App struct + bindings exposed to JS
-    frontend/dist/  index.html / main.js / style.css
-    wails.json      Wails project config (mostly informational)
-  fliporium-cli/    headless / REPL peer binary (kept around for scripted tests)
-  probestore/       dev tool: dump a store.db's peers and messages
+  fliporium/       Wails desktop app (the product); embeds frontend/dist
+    main.go        entry point + WebView2 asset/catch server
+    app.go         App struct + methods bound to JS
+    avatar.go      profile-image pick/downscale
+    unfurl.go      sender-side link unfurling (+ SSRF / decode-bomb guards)
+    frontend/dist  index.html / main.js / style.css (no build step)
+  flipsignal/      signaling + matchmaking server (WebSocket)
+  flipstats/       public stats + .exe download counter + contact relay (VPS)
+  probestore/      dev tool: dump a store.db
+  setpref/         dev tool: read/write the app_settings table
 internal/
-  peer/             wire protocol (proto.go) + Hub / dial / accept / TLS (peer.go)
-  store/            SQLite-backed message + peer persistence
-build.ps1           one-shot build of both binaries
-run.ps1             one-shot launch of the GUI (or CLI with -Cli)
+  peer/            protocol (proto.go), Hub + dispatch (peer.go), WebRTC glue
+                   (webrtc.go), file transfer (flip.go), E2E crypto (crypto.go)
+  rtc/             signaling client/server (signal.go, server.go), room mesh
+                   (room.go), single-peer Connect (rtc.go)
+  identity/        Ed25519 install identity
+  store/           SQLite persistence + FTS5 search
+deploy/            Caddyfile, systemd units, install/deploy scripts (see deploy/README.md)
+site/              the marketing site served at fliporium.com
+build.ps1          build the GUI and/or signaling server
+run.ps1            launch the GUI (builds first if needed)
 ```
 
 ## Build
 
+Requires Go 1.26+ on `PATH` (or the user-scope install at `~/go-sdk/bin`).
+
 ```powershell
-.\build.ps1                # build both binaries
-.\build.ps1 -Gui           # GUI only
-.\build.ps1 -Cli           # CLI only
+.\build.ps1            # GUI + signaling server
+.\build.ps1 -Gui       # GUI only
+.\build.ps1 -Signal    # signaling server only
 ```
 
-**Important:** the GUI binary must be built with Wails build tags. `build.ps1`
-already does this. If you ever invoke `go build` by hand, use:
+**The GUI must be built with the Wails build tags.** `build.ps1` does this; if
+you ever call `go build` by hand:
 
 ```powershell
 go build -tags 'desktop,production' -ldflags '-H windowsgui -s -w' -o fliporium.exe ./cmd/fliporium
 ```
 
-Otherwise the binary launches and immediately pops a Win32 error dialog
-("Wails applications will not build without the correct build tags").
+Without the tags the binary launches and immediately pops a Win32 error dialog.
 
 ## Run
 
 ```powershell
-.\run.ps1                                          # GUI: hostname=fliporium, data=.\fliporium-data-fliporium
-.\run.ps1 -Hostname alice                          # custom tailnet hostname
-.\run.ps1 -DataDir D:\flip                         # custom identity/data location
-.\run.ps1 -Cli                                     # CLI REPL instead (in this window)
+.\run.ps1                   # data dir: fliporium-data, next to the exe
+.\run.ps1 -Name alice       # data dir fliporium-data-alice (a second local instance)
+.\run.ps1 -DataDir D:\flip  # explicit data/identity folder
 ```
 
-First launch needs a Headscale pre-auth key. `run.ps1` loads it from
-`.preauth-test` for this dev session. Subsequent launches reuse the saved
-tailnet identity in the data dir.
+Each data dir is an independent install with its own Ed25519 identity, generated
+on first launch. There's no auth key and no signup — create a room or paste an
+invite link from inside the app.
 
-To rotate the pre-auth key:
+### Environment
 
-```bash
-# on the VPS
-sudo headscale preauthkeys create --user 1 --reusable --expiration 24h
-```
+| Variable | Effect |
+| --- | --- |
+| `FLIPORIUM_DIR` | data/identity directory (default: `fliporium-data` next to the exe) |
+| `FLIPORIUM_HOSTNAME` | override the routing id (normally the Ed25519 fingerprint; used to run several peers on one box) |
+| `FLIPORIUM_SIGNAL` | signaling server URL (default `wss://fliporium.com/ws`) |
+| `FLIPORIUM_STUN` | comma-separated STUN servers |
+| `FLIPORIUM_ROOM` | auto-join a room id at launch (dev/testing) |
 
-Drop the resulting `hskey-auth-...` value into `.preauth-test`.
+## Security & privacy
 
-## Verifying the chat works
+- Peers are authenticated by a **signed Ed25519 challenge** bound to both sides'
+  nonces, so a peer can't claim another's identity or relay a third party's proof.
+- Room content is **end-to-end encrypted** with a per-room NaCl secretbox key
+  that lives only in the invite link. The signaling and TURN servers handle
+  ciphertext only.
+- The server can see connection **metadata** (room ids, a chosen display name,
+  who is online) but never message or file content. With no accounts, none of it
+  ties to a real identity.
 
-In two PowerShell windows:
+See the [privacy page](https://fliporium.com/privacy) for the user-facing version.
+
+## Dev tools
 
 ```powershell
-# window 1: GUI
-.\run.ps1 -Hostname flip-gui
-
-# window 2: CLI peer that auto-connects and sends a message
-$env:FLIPORIUM_AUTOPEER = 'flip-gui'
-$env:FLIPORIUM_AUTOSAY  = 'hello **from the CLI**'
-.\run.ps1 -Cli -Hostname flip-a
+go run ./cmd/probestore <data-dir>            # dump a store.db's peers and messages
+go run ./cmd/setpref <data-dir> <key> [value] # read (no value), set, or delete (empty value) a setting
 ```
 
-The GUI should show `flip-a` in The Floor; clicking on it shows the message
-with Markdown rendering. Type a reply in the GUI; the CLI REPL prints it.
-
-To inspect the SQLite store directly:
+## Tests
 
 ```powershell
-go run .\cmd\probestore .\fliporium-data-flip-gui
+go test ./...
 ```
 
-## Architecture notes (Phase 4 state)
+Coverage includes the protocol and handshake (impersonation and auth-relay
+resistance), offline-backlog authentication, end-to-end encryption round-trips,
+the SQLite store, and the link-unfurl guards.
 
-- Each Fliporium instance runs its own `tsnet.Server` in-process - no separate
-  Tailscale install required.
-- Peer connections are TCP on port 41642, wrapped in TLS (self-signed, peer
-  identity is established by the underlying Tailscale/WireGuard layer; the
-  TLS layer is defense in depth).
-- Messages are length-prefixed JSON Envelopes with one of HELLO / MESSAGE / BYE.
-- SQLite (`modernc.org/sqlite`, pure Go) persists peers and messages inside the
-  data dir. Identity (`tailscaled.state`) also lives there.
-- Frontend is plain HTML + CSS + a single `main.js`; no build chain. Markdown
-  rendering is an in-house ~50-line escape-then-transform renderer.
+## Run your own
 
-## Flipping files (Phase 5)
+Fliporium has no lock-in — anyone can run the coordination piece. Stand up
+`flipsignal` (a single Go binary) on any host, optionally add a coturn relay for
+hard NATs, and point clients at it with `FLIPORIUM_SIGNAL=wss://your-host/ws`.
+The [`deploy/`](deploy/README.md) folder has a Caddyfile, systemd units, and an
+install script: copy [`.vps.example`](.vps.example) to `.vps`, fill in your
+server, and run `./deploy/deploy.sh`. Your messages stay end-to-end encrypted no
+matter whose server brokers the handshake.
 
-Drag any file onto the Fliporium window while a peer is selected and connected,
-or click the **flip** button to pick from a dialog. The file streams over the
-peer connection (chunked, JSON-wrapped, ~64 KB per chunk), is sha256-verified
-on arrival, and lands in `<dataDir>/catch/<peer>/<filename>`.
+The reference deployment (signaling server, the `flipstats` download/stats/contact
+service, coturn, and Caddy) runs the official build at
+[fliporium.com](https://fliporium.com).
 
-Inline viewers (auto-selected by MIME):
+## Contributing
 
-- images (jpg/png/gif/webp/svg/avif/...)
-- video (mp4/webm/...)
-- audio (mp3/wav/ogg/flac/...)
-- PDF (via WebView2's native viewer)
-- text/code (md/txt/json/go/py/...; truncated above 8 KB with "open" button)
+Issues and PRs welcome. Keep `go test ./...` green, and remember the GUI must be
+built with the Wails tags (see [Build](#build)). Official Windows builds come
+only from [fliporium.com](https://fliporium.com) — please don't distribute
+look-alike binaries under the Fliporium name.
 
-Everything else gets a download card with an **open** button that hands the file
-to the OS default application.
+## License
 
-CLI equivalents (in `.\run.ps1 -Cli`):
-
-```
-flip <path>             # send to the only open peer
-flip @<peer> <path>     # send to a specific peer
-```
-
-## Booths (Phase 6)
-
-A **Booth** is a named multi-peer chat room. Each peer keeps its own copy of
-the booth, members, and message history; the founder seeds it via a
-`BOOTH_INVITE` envelope to each other member.
-
-GUI: in The Floor, click the **+** next to "Booths" to create one. You're
-prompted for a name and a comma-separated member list (online peers are
-pre-filled as a hint). Click a booth row to see its messages. The composer
-posts to the booth and the message fans out to every connected member.
-
-CLI:
-
-```
-booth create <name> <peer1,peer2,...>
-booth list
-booth members <id|name>
-booth send <id|name> <text>
-```
-
-Scripted-test env on the CLI:
-
-- `FLIPORIUM_AUTOPEER=p1,p2`         comma-separated peers to auto-dial
-- `FLIPORIUM_AUTOBOOTH=name|p1,p2`   create the booth after auto-peering
-- `FLIPORIUM_AUTOBOOTHSAY=text`      send this message into the auto-created booth
-
-Phase 6 MVP **does not yet**: edit/delete messages, reply/thread, react with
-emoji, pin, theme, customize emoji, search, support roles, or store-and-forward
-missed messages to members who were offline when the booth was created.
-
-## Known caveats (will be tightened in later phases)
-
-- Outbound message path from GUI is implemented but not yet visually verified.
-- TLS cert validation is intentionally skipped (`InsecureSkipVerify`); peer
-  identity is left to Tailscale. A future phase will pin Tailscale node keys.
-- No retry on disconnect; if a peer drops, you have to click `connect` again.
-- Single Booth (everyone is just "a peer"); Phase 6 introduces real Booths.
-- Flip MVP limitations: no resumability, no multi-file flips, no folder flips,
-  no pause/cancel. Big files load fully into memory per chunk because we wrap
-  chunks in JSON+base64 — a future binary-framing change fixes that.
+[MIT](LICENSE). Windows 10/11 today; the networking core is cross-platform, so
+other desktop targets are possible later.

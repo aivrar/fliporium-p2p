@@ -9,29 +9,110 @@ const state = {
     peers: [],
     booths: [],                                  // [BoothRecord]
     selection: null,                             // {kind: 'peer'|'booth', key: name|id}
-    unread: new Set(),                           // peer names with unread
-    unreadBooths: new Set(),                     // booth ids with unread
+    unread: new Map(),                           // peer name -> unread count
+    unreadBooths: new Map(),                     // booth id -> unread count
+    muted: new Set(),                            // "booth:<id>" | "peer:<name>" keys
     msgsByPeer: new Map(),                       // peer -> [MessageRecord]
     msgsByBooth: new Map(),                      // boothId -> [MessageRecord]
     flipsByPeer: new Map(),                      // peer -> Map<id, FlipRecord>
-    showtimeByBooth: new Map(),                  // boothId -> { sessionId, flipId, leader, filename, mime, position, playing }
     peerStatus: new Map(),                       // peerName -> "active"|"idle"|"away"
     replyingTo: null,                            // { uuid, text, peer } when composing a reply
     appState: "initializing",
+    floorFilter: "",                             // text typed in the Floor filter box
+    showStalePeers: false,                       // reveal long-inactive people
+    showStaleBooths: false,                      // reveal long-inactive rooms
 };
 
 const QUICK_REACTIONS = ["👍","❤️","😂","🎉","🔥","🙏"];
 
-let leaderStateInterval = null;
-let suppressNextEvent = false;
-const SHOWTIME_STATE_INTERVAL_MS = 2000;
-const SHOWTIME_SYNC_THRESHOLD_SEC = 1.0;
+// A room/person is "inactive" once it has had no signal for this long (no
+// connection, no unread, not the open conversation). Inactive items are tucked
+// behind a "show inactive" toggle so The Floor doesn't grow without bound —
+// nothing is deleted, just hidden until you ask for it (or filter for it).
+const FLOOR_STALE_DAYS = 30;
+
 
 function isPeerSelected(name) {
     return state.selection && state.selection.kind === "peer" && state.selection.key === name;
 }
 function isBoothSelected(id) {
     return state.selection && state.selection.kind === "booth" && state.selection.key === id;
+}
+
+// ---------- avatars ----------
+
+// avatarFor resolves a routing id to its avatar data URI ("" if none). Reads
+// live from state.self / state.peers, so it's always current.
+function avatarFor(name) {
+    if (state.self && name === state.self.hostname) return state.self.avatar || "";
+    const p = state.peers.find(p => p.name === name);
+    return (p && p.avatar) || "";
+}
+
+// isSafeAvatar guards what we drop into an <img src>: only image data: URIs.
+// (The backend already validates inbound avatars, but defend in depth.)
+function isSafeAvatar(uri) {
+    return typeof uri === "string" && /^data:image\/(png|jpe?g|webp|gif);base64,/.test(uri);
+}
+
+function avatarInitials(s) {
+    s = (s || "").trim();
+    if (s.startsWith("fp-")) s = s.slice(3);
+    if (!s) return "?";
+    const parts = s.split(/[\s_-]+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return s.slice(0, 2).toUpperCase();
+}
+
+// avatarColor derives a stable, distinguishable chip color from the id.
+function avatarColor(seed) {
+    seed = seed || "";
+    let h = 0;
+    for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+    return `hsl(${h % 360} 42% 42%)`;
+}
+
+// fillAvatar paints an existing .avatar element with name's picture, or colored
+// initials as a fallback.
+function fillAvatar(host, name, displayName) {
+    if (!host) return;
+    host.innerHTML = "";
+    host.classList.remove("avatar-initials");
+    host.style.background = "";
+    const uri = avatarFor(name);
+    if (isSafeAvatar(uri)) {
+        const img = document.createElement("img");
+        img.src = uri;
+        img.alt = "";
+        img.draggable = false;
+        host.appendChild(img);
+    } else {
+        host.classList.add("avatar-initials");
+        host.textContent = avatarInitials(displayName || name);
+        host.style.background = avatarColor(name);
+    }
+}
+
+// avatarEl builds a round avatar element: the picture if we have one, else
+// colored initials. size is an optional pixel diameter override.
+function avatarEl(name, displayName, size) {
+    const el = document.createElement("span");
+    el.className = "avatar";
+    if (size) { el.style.width = size + "px"; el.style.height = size + "px"; }
+    fillAvatar(el, name, displayName);
+    return el;
+}
+
+// startDM opens a private 2-person booth with a connected peer and focuses it.
+async function startDM(name) {
+    try {
+        const room = await window.go.main.App.StartDM(name);
+        await refreshBooths();
+        if (room && room.id) selectBooth(room.id);
+        toast("private booth opened — they'll get an invite to accept");
+    } catch (e) {
+        toast("couldn't start private booth: " + e);
+    }
 }
 
 // ---------- small Markdown renderer ----------
@@ -69,8 +150,18 @@ function formatBytes(n) {
     return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
 }
 
+// escapeAttr escapes a string for safe insertion into HTML — both attribute
+// values AND element text. It must escape <, >, & and quotes: peers control
+// strings like display names and filenames, and these flow into innerHTML, so
+// missing < / > here is a stored-XSS hole (and in a Wails webview, XSS can call
+// every bound Go method). Used everywhere untrusted text meets innerHTML.
 function escapeAttr(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+    return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
 }
 
 function toast(text, ms = 2500) {
@@ -81,81 +172,758 @@ function toast(text, ms = 2500) {
     toast._t = setTimeout(() => el.classList.add("hidden"), ms);
 }
 
+// ---------- links: bare-URL detection + open in system browser ----------
+
+const TRAIL_PUNCT = /[.,!?:;)\]}'"]+$/;
+
+function hostOf(url) {
+    try { return new URL(url).hostname.replace(/^www\./, ""); }
+    catch (e) { return url; }
+}
+
+function externalURL(raw) {
+    try {
+        const u = new URL(String(raw || ""), window.location.href);
+        if (u.protocol === "http:" || u.protocol === "https:") return u.href;
+    } catch (e) {}
+    return "";
+}
+
+function cardImageSrc(raw) {
+    const s = String(raw || "");
+    if (s.length > 128 * 1024) return "";
+    return /^data:image\/(?:jpeg|jpg|png|gif|webp);base64,[a-z0-9+/=\s]+$/i.test(s) ? s : "";
+}
+
+function safeDomId(raw) {
+    return String(raw || "").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 120) || "x";
+}
+
+function findByDataset(container, key, value) {
+    const needle = String(value || "");
+    return Array.from(container.querySelectorAll("[data-" + key + "]"))
+        .find(el => el.dataset && el.dataset[key] === needle) || null;
+}
+
+// openExternal hands a URL to the OS default browser (Wails runtime) rather
+// than navigating the app's own webview to it.
+function openExternal(href) {
+    const safe = externalURL(href);
+    if (!safe) return;
+    if (window.runtime && window.runtime.BrowserOpenURL) window.runtime.BrowserOpenURL(safe);
+    else window.open(safe, "_blank", "noopener,noreferrer");
+}
+
+// linkify turns bare http(s) URLs inside an element's text nodes into anchors,
+// skipping text already inside <a>, <code>, or <pre>. Markdown links are
+// already anchors by the time this runs, so they're left alone.
+function linkify(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+            for (let p = node.parentElement; p && p !== root; p = p.parentElement) {
+                const t = p.tagName;
+                if (t === "A" || t === "CODE" || t === "PRE") return NodeFilter.FILTER_REJECT;
+            }
+            return /https?:\/\//.test(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        },
+    });
+    const targets = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) targets.push(n);
+    for (const node of targets) {
+        const text = node.nodeValue;
+        const re = /https?:\/\/[^\s<>()]+/g;
+        const frag = document.createDocumentFragment();
+        let last = 0, m;
+        while ((m = re.exec(text))) {
+            const full = m[0];
+            const trail = (full.match(TRAIL_PUNCT) || [""])[0];
+            const url = trail ? full.slice(0, full.length - trail.length) : full;
+            if (!url) continue;
+            if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+            const a = document.createElement("a");
+            a.href = externalURL(url);
+            a.textContent = url;
+            a.className = "ext-link";
+            a.rel = "noopener noreferrer";
+            frag.appendChild(a);
+            if (trail) frag.appendChild(document.createTextNode(trail));
+            last = m.index + full.length;
+        }
+        if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+        if (frag.childNodes.length) node.parentNode.replaceChild(frag, node);
+    }
+}
+
+// ---------- link / YouTube preview cards ----------
+
+function renderCardEl(card) {
+    if (!card || !card.url) return null;
+    if (card.kind === "youtube" && card.videoId) return renderYouTubeCard(card);
+    return renderLinkCard(card);
+}
+
+function renderLinkCard(card) {
+    const href = externalURL(card.url);
+    if (!href) return null;
+    const el = document.createElement("a");
+    el.className = "link-card";
+    el.href = href;
+    el.rel = "noopener noreferrer";
+    if (card.image) {
+        const src = cardImageSrc(card.image);
+        if (!src) return null;
+        const img = document.createElement("img");
+        img.className = "link-card-img";
+        img.src = src;
+        img.alt = "";
+        el.appendChild(img);
+    }
+    const bodyEl = document.createElement("div");
+    bodyEl.className = "link-card-body";
+    const site = document.createElement("div");
+    site.className = "link-card-site";
+    site.textContent = card.siteName || hostOf(card.url);
+    bodyEl.appendChild(site);
+    if (card.title) {
+        const t = document.createElement("div");
+        t.className = "link-card-title";
+        t.textContent = card.title;
+        bodyEl.appendChild(t);
+    }
+    if (card.description) {
+        const d = document.createElement("div");
+        d.className = "link-card-desc";
+        d.textContent = card.description;
+        bodyEl.appendChild(d);
+    }
+    el.appendChild(bodyEl);
+    return el;
+}
+
+// renderYouTubeCard shows a thumbnail + play button. The actual YouTube player
+// (and any contact with Google) loads only when the user clicks play.
+function renderYouTubeCard(card) {
+    const href = externalURL(card.url);
+    if (!href) return null;
+    const el = document.createElement("div");
+    el.className = "yt-card";
+    const thumb = document.createElement("div");
+    thumb.className = "yt-thumb";
+    if (card.image) {
+        const src = cardImageSrc(card.image);
+        if (!src) return null;
+        const img = document.createElement("img");
+        img.src = src;
+        img.alt = "";
+        thumb.appendChild(img);
+    }
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "yt-play";
+    play.setAttribute("aria-label", "Play video");
+    play.innerHTML = "&#9654;";
+    thumb.appendChild(play);
+    el.appendChild(thumb);
+    if (card.title) {
+        const t = document.createElement("div");
+        t.className = "yt-title";
+        t.textContent = card.title;
+        el.appendChild(t);
+    }
+    const fallback = document.createElement("a");
+    fallback.className = "yt-link";
+    fallback.href = href;
+    fallback.rel = "noopener noreferrer";
+    fallback.textContent = "Watch on YouTube ↗";
+    el.appendChild(fallback);
+
+    const load = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const frame = document.createElement("iframe");
+        frame.className = "yt-frame";
+        frame.src = "https://www.youtube-nocookie.com/embed/" + encodeURIComponent(card.videoId) + "?autoplay=1&rel=0&playsinline=1";
+        frame.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture; fullscreen");
+        frame.setAttribute("allowfullscreen", "");
+        frame.setAttribute("title", "YouTube video");
+        thumb.replaceWith(frame);
+    };
+    thumb.addEventListener("click", load);
+    return el;
+}
+
+function applyMessageCard(mc) {
+    if (!mc || !mc.uuid) return;
+    const found = findMessageEverywhere(mc.uuid, mc.boothId);
+    if (!found) return;
+    found.msg.card = mc.card;
+    if ((mc.boothId && isBoothSelected(mc.boothId)) || (!mc.boothId && isPeerSelected(found.peer || found.msg.peer))) {
+        renderMessage(found.msg, $("messages"));
+    }
+}
+
+// ---------- clipboard image paste ----------
+
+async function blobToBase64(blob) {
+    const buf = await blob.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+}
+
+// sendImageBlob writes a pasted image into the app dir and flips it to the
+// current room/peer (parks it if you're alone, like a dropped file).
+async function sendImageBlob(blob, mime) {
+    if (!state.selection) { toast("open a room or peer first, then paste"); return; }
+    try {
+        const b64 = await blobToBase64(blob);
+        const isBooth = state.selection.kind === "booth";
+        await window.go.main.App.SendPastedImage(state.selection.key, isBooth, b64, mime || blob.type || "image/png");
+        toast("sending pasted image…");
+    } catch (e) {
+        toast("paste image: " + e);
+    }
+}
+
+// ---------- right-click context menu ----------
+
+function bindContextMenu() {
+    let menu = null;
+    const hide = () => { if (menu) { menu.remove(); menu = null; } };
+    document.addEventListener("click", hide);
+    document.addEventListener("scroll", hide, true);
+    window.addEventListener("blur", hide);
+    window.addEventListener("resize", hide);
+
+    document.addEventListener("contextmenu", (e) => {
+        const items = buildContextItems(e);
+        if (!items.length) { hide(); return; } // let native menu handle media/empty space
+        e.preventDefault();
+        hide();
+        menu = document.createElement("div");
+        menu.className = "ctx-menu";
+        for (const it of items) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "ctx-item";
+            b.textContent = it.label;
+            b.addEventListener("click", (ev) => { ev.stopPropagation(); hide(); it.action(); });
+            menu.appendChild(b);
+        }
+        document.body.appendChild(menu);
+        let x = e.clientX, y = e.clientY;
+        if (x + menu.offsetWidth > window.innerWidth) x = window.innerWidth - menu.offsetWidth - 6;
+        if (y + menu.offsetHeight > window.innerHeight) y = window.innerHeight - menu.offsetHeight - 6;
+        menu.style.left = Math.max(4, x) + "px";
+        menu.style.top = Math.max(4, y) + "px";
+    });
+}
+
+function buildContextItems(e) {
+    const items = [];
+    const target = e.target;
+    const img = (target.closest && target.closest("img")) || null;
+    const link = target.closest && target.closest('a[href]');
+    const input = target.closest && target.closest('input, textarea, [contenteditable="true"]');
+    const selection = (window.getSelection && window.getSelection().toString()) || "";
+
+    if (img && (img.currentSrc || img.getAttribute("src"))) {
+        items.push({ label: "Copy image", action: () => copyImage(img) });
+    }
+    if (link) {
+        const href = link.getAttribute("href");
+        items.push({ label: "Open link", action: () => openExternal(href) });
+        items.push({ label: "Copy link", action: () => copyText(href) });
+        if (selection.trim()) items.push({ label: "Copy text", action: () => copyText(selection) });
+        return items;
+    }
+    if (items.length) return items; // a plain image (no enclosing link)
+    if (input) {
+        items.push({ label: "Cut", action: () => cutFromInput(input) });
+        items.push({ label: "Copy", action: () => copyText(selectionInInput(input)) });
+        items.push({ label: "Paste", action: () => pasteIntoInput(input) });
+        items.push({ label: "Select all", action: () => input.select && input.select() });
+        return items;
+    }
+    // Floor rows: room / person management.
+    const floorBooth = target.closest && target.closest('#booths li[data-booth-id]');
+    if (floorBooth) {
+        const id = floorBooth.dataset.boothId;
+        const booth = state.booths.find(b => b.id === id);
+        if (booth && booth.pending) {
+            items.push({ label: "Accept invite", action: () => acceptInvite(id) });
+            items.push({ label: "Decline", action: () => declineInvite(id) });
+            return items;
+        }
+        const mkey = "booth:" + id;
+        items.push({ label: "Copy invite link", action: () => copyRoomLink(id) });
+        items.push({ label: state.muted.has(mkey) ? "Unmute" : "Mute", action: () => toggleMute(mkey) });
+        items.push({ label: "Leave room", action: () => leaveRoom(id, booth) });
+        items.push({ label: "Delete (purge history)", action: () => deleteRoom(id, booth) });
+        return items;
+    }
+    const floorPeer = target.closest && target.closest('#peers li[data-name]');
+    if (floorPeer) {
+        const name = floorPeer.dataset.name;
+        const mkey = "peer:" + name;
+        const p = state.peers.find(x => x.name === name);
+        if (p && p.connected) {
+            items.push({ label: "Message privately", action: () => startDM(name) });
+        }
+        items.push({ label: state.muted.has(mkey) ? "Unmute" : "Mute", action: () => toggleMute(mkey) });
+        items.push({ label: "Block", action: () => blockPeer(name) });
+        return items;
+    }
+    if (selection.trim()) {
+        items.push({ label: "Copy", action: () => copyText(selection) });
+        return items;
+    }
+    // Right-click on a message or file card with nothing selected: copy the
+    // whole thing's text.
+    const block = target.closest && target.closest(".msg, .flip");
+    if (block) {
+        const body = block.querySelector(".body") || block;
+        const text = (body.innerText || body.textContent || "").trim();
+        if (text) items.push({ label: "Copy", action: () => copyText(text) });
+    }
+    return items;
+}
+
+// copyText writes to the clipboard via the async API, falling back to a hidden
+// textarea + execCommand when the webview blocks clipboard-write.
+async function copyText(text) {
+    if (!text) return;
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            return;
+        }
+    } catch (e) { /* fall through to execCommand */ }
+    try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.top = "-1000px";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+    } catch (e) {
+        toast("couldn't copy");
+    }
+}
+
+// copyImage writes an <img> to the clipboard as a PNG. The image is drawn to a
+// canvas first (which also normalizes any format to PNG, the only image type
+// the clipboard reliably accepts). Works for caught-file previews (/catch, same
+// origin) and baked-in card thumbnails (data: URIs) — neither taints the canvas.
+async function copyImage(imgEl) {
+    if (!(window.ClipboardItem && navigator.clipboard && navigator.clipboard.write)) {
+        toast("copying images isn't supported here");
+        return;
+    }
+    try {
+        const blob = await imageToPngBlob(imgEl);
+        if (!blob) { toast("couldn't read that image"); return; }
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        toast("image copied");
+    } catch (e) {
+        toast("couldn't copy image: " + e);
+    }
+}
+
+function imageToPngBlob(imgEl) {
+    return new Promise((resolve) => {
+        try {
+            const w = imgEl.naturalWidth || imgEl.width;
+            const h = imgEl.naturalHeight || imgEl.height;
+            if (!w || !h) { resolve(null); return; }
+            const canvas = document.createElement("canvas");
+            canvas.width = w;
+            canvas.height = h;
+            canvas.getContext("2d").drawImage(imgEl, 0, 0, w, h);
+            canvas.toBlob((b) => resolve(b), "image/png");
+        } catch (e) {
+            resolve(null);
+        }
+    });
+}
+
+function selectionInInput(input) {
+    if (input.selectionStart != null && input.selectionStart !== input.selectionEnd) {
+        return input.value.slice(input.selectionStart, input.selectionEnd);
+    }
+    return input.value || "";
+}
+
+function cutFromInput(input) {
+    const s = input.selectionStart, en = input.selectionEnd;
+    let text;
+    if (s != null && en != null && s !== en) {
+        text = input.value.slice(s, en);
+        input.setRangeText("", s, en, "end");
+    } else {
+        text = input.value;
+        input.value = "";
+    }
+    copyText(text);
+}
+
+function insertAtCursor(input, text) {
+    const s = input.selectionStart != null ? input.selectionStart : input.value.length;
+    const en = input.selectionEnd != null ? input.selectionEnd : input.value.length;
+    input.setRangeText(text, s, en, "end");
+    input.focus();
+}
+
+// pasteIntoInput routes a clipboard image to a flip; otherwise pastes text.
+async function pasteIntoInput(input) {
+    try {
+        if (navigator.clipboard && navigator.clipboard.read) {
+            const items = await navigator.clipboard.read();
+            for (const it of items) {
+                const imgType = (it.types || []).find(t => t.startsWith("image/"));
+                if (imgType) {
+                    const blob = await it.getType(imgType);
+                    await sendImageBlob(blob, imgType);
+                    return;
+                }
+            }
+        }
+    } catch (e) { /* fall through to text paste */ }
+    try {
+        const text = await navigator.clipboard.readText();
+        if (text) insertAtCursor(input, text);
+    } catch (e) {
+        toast("couldn't read clipboard");
+    }
+}
+
+// ---------- room / people controls ----------
+
+async function copyRoomLink(id) {
+    try {
+        const link = await window.go.main.App.RoomLinkFor(id);
+        await copyText(link);
+        toast("invite link copied");
+    } catch (e) { toast("copy invite: " + e); }
+}
+
+async function leaveRoom(id, booth) {
+    const nm = (booth && booth.name) || "this room";
+    if (!confirm("Leave " + nm + "? You'll stop getting its messages and it leaves your list. Your history stays — rejoin anytime with the invite link.")) return;
+    try { await window.go.main.App.LeaveRoom(id); toast("left " + nm); }
+    catch (e) { toast("leave: " + e); }
+}
+
+async function deleteRoom(id, booth) {
+    const nm = (booth && booth.name) || "this room";
+    if (!confirm("Delete " + nm + " and PURGE its history from this device? This can't be undone.")) return;
+    try { await window.go.main.App.DeleteRoom(id); toast("deleted " + nm); }
+    catch (e) { toast("delete: " + e); }
+}
+
+async function blockPeer(name) {
+    if (!confirm("Block " + peerLabel(name) + "? They won't be able to connect to you in any room and you won't see their messages. Reversible in Backstage.")) return;
+    try { await window.go.main.App.BlockPeer(name); toast("blocked"); }
+    catch (e) { toast("block: " + e); }
+}
+
+async function acceptInvite(id) {
+    try {
+        await window.go.main.App.AcceptInvite(id);
+        await refreshBooths();
+        await selectBooth(id);
+    } catch (e) { toast("accept: " + e); }
+}
+
+async function declineInvite(id) {
+    try { await window.go.main.App.DeclineInvite(id); }
+    catch (e) { toast("decline: " + e); }
+}
+
+// ---------- mute (local, persisted) ----------
+
+async function loadMuted() {
+    try {
+        const raw = await window.go.main.App.GetPref("muted_keys");
+        state.muted = new Set((raw || "").split(",").filter(Boolean));
+    } catch (e) { state.muted = new Set(); }
+}
+function persistMuted() {
+    window.go.main.App.SetPref("muted_keys", Array.from(state.muted).join(",")).catch(() => {});
+}
+function toggleMute(key) {
+    if (state.muted.has(key)) state.muted.delete(key);
+    else state.muted.add(key);
+    persistMuted();
+    renderFloor();
+}
+function conversationMuted(m) {
+    const key = m.boothId ? ("booth:" + m.boothId) : ("peer:" + m.peer);
+    return state.muted.has(key);
+}
+
 // ---------- The Floor (peer list) ----------
 
-function renderFloor() {
-    const peersUl = $("peers");
-    peersUl.innerHTML = "";
-    if (state.peers.length === 0) {
-        $("floor-empty").classList.remove("hidden");
-    } else {
-        $("floor-empty").classList.add("hidden");
-        for (const p of state.peers) {
-            const li = document.createElement("li");
-            li.dataset.name = p.name;
-            if (isPeerSelected(p.name)) li.classList.add("selected");
-            if (state.unread.has(p.name)) li.classList.add("unread");
+// ---------- Floor filtering + stale-hiding ----------
 
-            const dot = document.createElement("span");
-            // Status from peer-status events overrides "online" if available.
-            const liveStatus = state.peerStatus.get(p.name);
-            let dotClass = "offline";
-            if (p.connected) {
-                if (liveStatus === "idle") dotClass = "idle";
-                else if (liveStatus === "away") dotClass = "away";
-                else dotClass = "connected";
-            } else if (p.tailnetOnline) {
-                dotClass = "online";
-            }
-            dot.className = "dot " + dotClass;
-            li.appendChild(dot);
+// withinDays reports whether an ISO timestamp is within `days` of now.
+function withinDays(iso, days) {
+    if (!iso) return false;
+    const t = new Date(iso).getTime();
+    return !isNaN(t) && (Date.now() - t) < days * 86400000;
+}
 
-            const name = document.createElement("span");
-            name.className = "name";
-            name.textContent = p.displayName || p.name;
-            li.appendChild(name);
+// floorMatch tests a label against the current filter text.
+function floorMatch(...labels) {
+    const f = state.floorFilter.trim().toLowerCase();
+    if (!f) return true;
+    return labels.some(l => (l || "").toLowerCase().includes(f));
+}
 
-            const meta = document.createElement("span");
-            meta.className = "meta";
-            meta.textContent = p.connected ? "live" : (p.tailnetOnline ? "online" : "");
-            li.appendChild(meta);
+// peerActive / boothActive decide what stays visible with no filter typed:
+// anything connected, unread, currently open, pending, or seen recently.
+// Everything else is "inactive" and tucked behind the show-more toggle.
+function peerActive(p) {
+    return !!p.connected
+        || (state.unread.get(p.name) || 0) > 0
+        || isPeerSelected(p.name)
+        || withinDays(p.lastSeen, FLOOR_STALE_DAYS);
+}
+function boothActive(b) {
+    return !!b.pending
+        || boothOnlineCount(b) > 0
+        || (state.unreadBooths.get(b.id) || 0) > 0
+        || isBoothSelected(b.id)
+        || withinDays(b.lastActivity, FLOOR_STALE_DAYS);
+}
 
-            li.addEventListener("click", () => selectPeer(p.name));
-            peersUl.appendChild(li);
-        }
+function floorMoreRow(hiddenCount, expanded, onToggle) {
+    const li = document.createElement("li");
+    li.className = "floor-more";
+    li.textContent = expanded ? "show fewer" : ("show " + hiddenCount + " inactive");
+    li.title = expanded ? "Hide inactive rooms and people again" : "Show rooms and people that have been quiet for a while";
+    li.addEventListener("click", onToggle);
+    return li;
+}
+
+function buildPeerRow(p) {
+    const li = document.createElement("li");
+    li.dataset.name = p.name;
+    if (isPeerSelected(p.name)) li.classList.add("selected");
+    if (state.muted.has("peer:" + p.name)) li.classList.add("muted");
+    const unread = state.unread.get(p.name) || 0;
+    if (unread > 0) li.classList.add("unread");
+
+    const dot = document.createElement("span");
+    // Status from peer-status events overrides "online" if available.
+    const liveStatus = state.peerStatus.get(p.name);
+    let dotClass = "offline";
+    if (p.connected) {
+        if (liveStatus === "idle") dotClass = "idle";
+        else if (liveStatus === "away") dotClass = "away";
+        else dotClass = "connected";
+    }
+    dot.className = "dot " + dotClass;
+    dot.title = p.connected ? (liveStatus || "online") : "offline";
+    li.appendChild(dot);
+
+    li.appendChild(avatarEl(p.name, p.displayName, 26));
+
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = p.displayName || p.name;
+    li.appendChild(name);
+
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = p.connected ? "live" : "";
+    li.appendChild(meta);
+
+    li.title = "Open your chat with " + (p.displayName || p.name) + (p.connected ? "" : " (offline)");
+    appendUnreadBadge(li, unread);
+    li.addEventListener("click", () => selectPeer(p.name));
+    return li;
+}
+
+function buildBoothRow(b) {
+    const li = document.createElement("li");
+    li.dataset.boothId = b.id;
+
+    if (b.pending) {
+        li.classList.add("pending");
+        const pname = document.createElement("span");
+        pname.className = "name";
+        pname.textContent = b.name;
+        li.appendChild(pname);
+        const tag = document.createElement("span");
+        tag.className = "meta";
+        tag.textContent = "invite";
+        li.appendChild(tag);
+        const ok = document.createElement("button");
+        ok.className = "invite-btn ok";
+        ok.textContent = "✓";
+        ok.title = "accept";
+        ok.addEventListener("click", (e) => { e.stopPropagation(); acceptInvite(b.id); });
+        const no = document.createElement("button");
+        no.className = "invite-btn no";
+        no.textContent = "✕";
+        no.title = "decline";
+        no.addEventListener("click", (e) => { e.stopPropagation(); declineInvite(b.id); });
+        li.appendChild(ok);
+        li.appendChild(no);
+        li.title = "Invite to “" + b.name + "” — accept or decline";
+        return li;
     }
 
-    // Booths section
+    if (isBoothSelected(b.id)) li.classList.add("selected");
+    if (state.muted.has("booth:" + b.id)) li.classList.add("muted");
+    const unread = state.unreadBooths.get(b.id) || 0;
+    if (unread > 0) li.classList.add("unread");
+
+    const online = boothOnlineCount(b);
+    const icon = document.createElement("span");
+    icon.className = "dot " + (online > 0 ? "connected" : "online");
+    icon.title = online > 0 ? (online + " here now") : "no one here right now";
+    li.appendChild(icon);
+
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = b.name;
+    li.appendChild(name);
+
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = online > 0 ? (online + " here") : ((b.members || []).length + "m");
+    li.appendChild(meta);
+
+    li.title = "Open room: " + b.name;
+    appendUnreadBadge(li, unread);
+    li.addEventListener("click", () => selectBooth(b.id));
+    return li;
+}
+
+function renderFloor() {
+    const filtering = state.floorFilter.trim() !== "";
+
+    // ----- Rooms -----
     const boothsUl = $("booths");
     boothsUl.innerHTML = "";
-    if (state.booths.length === 0) {
-        $("booths-empty").classList.remove("hidden");
-    } else {
-        $("booths-empty").classList.add("hidden");
-        for (const b of state.booths) {
-            const li = document.createElement("li");
-            li.dataset.boothId = b.id;
-            if (isBoothSelected(b.id)) li.classList.add("selected");
-            if (state.unreadBooths.has(b.id)) li.classList.add("unread");
-
-            const icon = document.createElement("span");
-            icon.className = "dot online"; // booth dot
-            li.appendChild(icon);
-
-            const name = document.createElement("span");
-            name.className = "name";
-            name.textContent = b.name;
-            li.appendChild(name);
-
-            const meta = document.createElement("span");
-            meta.className = "meta";
-            meta.textContent = (b.members || []).length + "m";
-            li.appendChild(meta);
-
-            li.addEventListener("click", () => selectBooth(b.id));
-            boothsUl.appendChild(li);
+    const boothCandidates = state.booths.filter(b => floorMatch(b.name));
+    let boothsShown = boothCandidates;
+    if (!filtering && !state.showStaleBooths) boothsShown = boothCandidates.filter(boothActive);
+    for (const b of boothsShown) boothsUl.appendChild(buildBoothRow(b));
+    if (!filtering) {
+        const hidden = boothCandidates.filter(b => !boothActive(b)).length;
+        if (hidden > 0 || (state.showStaleBooths && boothCandidates.some(b => !boothActive(b)))) {
+            boothsUl.appendChild(floorMoreRow(hidden, state.showStaleBooths, () => {
+                state.showStaleBooths = !state.showStaleBooths;
+                renderFloor();
+            }));
         }
     }
+    const boothEmpty = $("booths-empty");
+    boothEmpty.textContent = filtering ? "no rooms match" : "no rooms yet — create one or join via a link";
+    boothEmpty.classList.toggle("hidden", boothCandidates.length !== 0);
+
+    // ----- People -----
+    const peersUl = $("peers");
+    peersUl.innerHTML = "";
+    const peerCandidates = state.peers.filter(p => floorMatch(p.name, p.displayName));
+    let peersShown = peerCandidates;
+    if (!filtering && !state.showStalePeers) peersShown = peerCandidates.filter(peerActive);
+    for (const p of peersShown) peersUl.appendChild(buildPeerRow(p));
+    if (!filtering) {
+        const hidden = peerCandidates.filter(p => !peerActive(p)).length;
+        if (hidden > 0 || (state.showStalePeers && peerCandidates.some(p => !peerActive(p)))) {
+            peersUl.appendChild(floorMoreRow(hidden, state.showStalePeers, () => {
+                state.showStalePeers = !state.showStalePeers;
+                renderFloor();
+            }));
+        }
+    }
+    const peerEmpty = $("floor-empty");
+    peerEmpty.textContent = filtering ? "no people match" : "no one connected yet";
+    peerEmpty.classList.toggle("hidden", peerCandidates.length !== 0);
+}
+
+// bindFloorFilter wires the "filter rooms & people" box. While text is present,
+// the stale-hiding is bypassed so you can find anything, inactive or not.
+function bindFloorFilter() {
+    const input = $("floorFilter");
+    if (!input) return;
+    input.addEventListener("input", () => { state.floorFilter = input.value; renderFloor(); });
+    input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { input.value = ""; state.floorFilter = ""; renderFloor(); input.blur(); }
+    });
+}
+
+// bindWindowControls wires our custom minimize/maximize/close buttons (the
+// window is frameless, so there are no native ones) and double-click-to-maximize
+// on the title bar, mirroring native behavior.
+function bindWindowControls() {
+    const r = window.runtime;
+    if (!r) return;
+    const min = $("win-min"), max = $("win-max"), close = $("win-close");
+    if (min) min.addEventListener("click", () => r.WindowMinimise && r.WindowMinimise());
+    if (max) max.addEventListener("click", () => r.WindowToggleMaximise && r.WindowToggleMaximise());
+    if (close) close.addEventListener("click", () => r.Quit && r.Quit());
+    const bar = $("topbar");
+    if (bar) bar.addEventListener("dblclick", (e) => {
+        if (e.target.closest("button, input, a, .avatar")) return;
+        r.WindowToggleMaximise && r.WindowToggleMaximise();
+    });
+}
+
+// bindHelp wires the Help button + overlay and the welcome-screen actions, so a
+// brand-new user has an obvious way to learn the app and to take a first action.
+function bindHelp() {
+    const overlay = $("help-overlay");
+    const open = () => overlay.classList.remove("hidden");
+    const close = () => overlay.classList.add("hidden");
+    $("helpBtn").addEventListener("click", open);
+    $("help-close").addEventListener("click", close);
+    $("help-tour").addEventListener("click", () => { close(); showTour(0); });
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); }); // backdrop click
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !overlay.classList.contains("hidden")) close();
+    });
+    // Welcome-screen actions (shown when no conversation is open).
+    const create = $("welcome-create");
+    if (create) create.addEventListener("click", () => $("createBoothBtn").click());
+    const paste = $("welcome-paste");
+    if (paste) paste.addEventListener("click", () => {
+        const inp = $("connectInput");
+        if (inp) { inp.focus(); inp.scrollIntoView({ block: "nearest" }); }
+        toast("paste your invite link in the box on the left ↙");
+    });
+}
+
+// boothOnlineCount counts how many of a booth's members are connected right now
+// (across our live rooms). Self is never in state.peers, so it's excluded.
+function boothOnlineCount(booth) {
+    const members = new Set(booth.members || []);
+    let n = 0;
+    for (const p of state.peers) {
+        if (p.connected && members.has(p.name)) n++;
+    }
+    return n;
+}
+
+// appendUnreadBadge adds a Discord-style numeric pill to a Floor row.
+function appendUnreadBadge(li, count) {
+    if (!count || count <= 0) return;
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = count > 99 ? "99+" : String(count);
+    li.appendChild(badge);
 }
 
 async function refreshPeers() {
@@ -188,6 +956,7 @@ function timelineForPeer(peerName) {
     const flipMap = state.flipsByPeer.get(peerName);
     if (flipMap) {
         for (const f of flipMap.values()) {
+            if (f.boothId) continue; // booth flips belong to their room, not the 1:1
             items.push({ kind: "flip", at: f.startedAt || f.at, data: f });
         }
     }
@@ -216,7 +985,7 @@ function findMessageByUUID(uuid) {
 
 function renderMessage(m, container) {
     // Reuse an existing <li> if we're updating the same UUID in place.
-    let li = m.uuid ? container.querySelector(`[data-msg="${escapeAttr(m.uuid)}"]`) : null;
+    let li = m.uuid ? findByDataset(container, "msg", m.uuid) : null;
     if (!li) {
         li = document.createElement("li");
         if (m.uuid) li.dataset.msg = m.uuid;
@@ -230,7 +999,11 @@ function renderMessage(m, container) {
         const meta = document.createElement("div");
         meta.className = "meta";
         const editedTag = m.editedAt && !m.deletedAt ? ` <span class="edited-tag">(edited)</span>` : "";
-        meta.innerHTML = (m.direction === "out" ? "me" : escapeAttr(m.displayName || m.peer)) + " - " + escapeAttr(shortTime(m.at)) + editedTag;
+        if (m.direction !== "out") meta.appendChild(avatarEl(m.peer, m.displayName, 18));
+        const who = document.createElement("span");
+        who.className = "who";
+        who.innerHTML = (m.direction === "out" ? "me" : escapeAttr(m.displayName || m.peer)) + " - " + escapeAttr(shortTime(m.at)) + editedTag;
+        meta.appendChild(who);
         li.appendChild(meta);
     }
 
@@ -248,6 +1021,14 @@ function renderMessage(m, container) {
     body.className = "body";
     body.innerHTML = m.deletedAt ? "[deleted]" : renderMarkdown(m.text || "");
     li.appendChild(body);
+    if (!m.deletedAt) linkify(body);
+
+    // Link / YouTube card. The sender unfurled this and baked in the thumbnail,
+    // so rendering it here never contacts the third-party site.
+    if (!m.deletedAt && m.card) {
+        const cardEl = renderCardEl(m.card);
+        if (cardEl) li.appendChild(cardEl);
+    }
 
     // Reactions
     if (m.reactions && Object.keys(m.reactions).length) {
@@ -433,20 +1214,20 @@ function peerLabel(name) {
     return (p && p.displayName) || name;
 }
 
-// flipVisibleNow reports whether a flip belongs in the currently open view —
-// either a 1:1 with its peer, or a room the peer is a member of.
+// flipVisibleNow reports whether a flip belongs in the currently open view,
+// scoped strictly by conversation: a 1:1 flip (no boothId) shows only in the
+// 1:1 with its peer; a booth flip shows only in that booth. This is what keeps
+// a file sent in one room from leaking into another that shares a member.
 function flipVisibleNow(f) {
-    if (isPeerSelected(f.peer)) return true;
-    if (state.selection && state.selection.kind === "booth") {
-        if (f.peer === state.selection.key) return true; // parked-in-room flip
-        const booth = state.booths.find(b => b.id === state.selection.key);
-        if (booth && (booth.members || []).includes(f.peer)) return true;
+    if (!state.selection) return false;
+    if (state.selection.kind === "peer") {
+        return !f.boothId && f.peer === state.selection.key;
     }
-    return false;
+    return f.boothId === state.selection.key;
 }
 
 function renderFlipCard(f, container) {
-    let card = container.querySelector(`[data-flip="${escapeAttr(f.id)}"]`);
+    let card = findByDataset(container, "flip", f.id);
     if (!card) {
         card = document.createElement("li");
         card.dataset.flip = f.id;
@@ -475,42 +1256,38 @@ function renderFlipCard(f, container) {
 
     const preview = renderFlipPreview(f);
 
-    const actions = [];
+    const actionItems = [];
     if (f.status === "complete" && f.direction === "in") {
-        actions.push(`<button onclick="openFlipExt('${escapeAttr(f.id)}')">open</button>`);
-    }
-    // Broadcast (Showtime) button: only when viewing a booth and the flip is video/audio.
-    const isMedia = f.mime && (f.mime.startsWith("video/") || f.mime.startsWith("audio/"));
-    if (f.status === "complete" && isMedia && state.selection && state.selection.kind === "booth") {
-        actions.push(`<button class="broadcast-btn" onclick="startShowtime('${escapeAttr(state.selection.key)}','${escapeAttr(f.id)}')">&#9654; broadcast</button>`);
+        actionItems.push({ label: "open", className: "", title: "", action: () => openFlipExt(f.id, f.filename) });
     }
     // Remove-from-my-device: available on any finished/parked transfer.
     if (f.status === "complete" || f.status === "queued" || f.status === "failed" || f.status === "cancelled") {
-        actions.push(`<button class="flip-remove" title="remove from my device" onclick="removeFlip('${escapeAttr(f.id)}','${escapeAttr(f.direction)}')">remove</button>`);
+        actionItems.push({ label: "remove", className: "flip-remove", title: "remove from my device", action: () => removeFlip(f.id, f.direction) });
     }
 
     card.innerHTML = `
-        <div class="meta">${senderLabel} - ${ts}</div>
+        <div class="meta">${escapeAttr(senderLabel)} - ${escapeAttr(ts)}</div>
         <div class="file-row">
             <span class="file-icon">📎</span>
             <span class="file-name">${escapeAttr(f.filename || "")}</span>
-            <span class="file-size">${sizeStr}</span>
+            <span class="file-size">${escapeAttr(sizeStr)}</span>
         </div>
         ${showProgress ? `<div class="progress"><div style="width:${progressPct}%"></div></div>` : ""}
         <div class="file-status">${escapeAttr(statusLine)}</div>
         ${preview}
-        ${actions.length ? `<div class="actions">${actions.join("")}</div>` : ""}
+        <div class="actions"></div>
     `;
-}
-
-async function startShowtime(boothId, flipId) {
-    try {
-        await window.go.main.App.StartShowtime(boothId, flipId);
-    } catch (e) {
-        toast("showtime: " + e);
+    const actions = card.querySelector(".actions");
+    for (const item of actionItems) {
+        const b = document.createElement("button");
+        if (item.className) b.className = item.className;
+        if (item.title) b.title = item.title;
+        b.textContent = item.label;
+        b.addEventListener("click", (e) => { e.stopPropagation(); item.action(); });
+        actions.appendChild(b);
     }
+    if (!actionItems.length) actions.remove();
 }
-window.startShowtime = startShowtime;
 
 function renderFlipPreview(f) {
     if ((f.status !== "complete" && f.status !== "queued") || !f.catchUrl) return "";
@@ -530,9 +1307,9 @@ function renderFlipPreview(f) {
     }
     if (mime.startsWith("text/") || isTextMime(mime, f.filename)) {
         // Render text inline via fetch; the placeholder gets replaced after.
-        const phid = "txt-" + f.id;
+        const phid = "txt-" + safeDomId(f.id);
         queueMicrotask(() => fillTextPreview(phid, url));
-        return `<div class="preview"><pre id="${phid}">(loading)</pre></div>`;
+        return `<div class="preview"><pre id="${escapeAttr(phid)}">(loading)</pre></div>`;
     }
     return "";
 }
@@ -565,7 +1342,21 @@ async function fillTextPreview(elemId, url) {
     }
 }
 
-async function openFlipExt(id) {
+// Extensions that ShellExecute would RUN rather than just open in a viewer.
+// "open" goes through the OS handler, so an attacker-named file like
+// "vacation.jpg.exe" or a .lnk/.bat could execute on a single click — warn
+// first so a received file can't quietly run code.
+const DANGEROUS_OPEN_EXT = new Set([
+    "exe","scr","com","pif","bat","cmd","msi","msp","cpl","jar",
+    "js","jse","vbs","vbe","wsf","wsh","ps1","psm1","hta","reg",
+    "lnk","url","scf","inf","dll","sys","gadget","mst","msc"
+]);
+
+async function openFlipExt(id, filename) {
+    const ext = String(filename || "").split(".").pop().toLowerCase();
+    if (DANGEROUS_OPEN_EXT.has(ext)) {
+        if (!confirm(`"${filename}" can run programs on your computer. Files from other people can be harmful — only open this if you trust who sent it. Open anyway?`)) return;
+    }
     try { await window.go.main.App.OpenFlipExternally(id); }
     catch (e) { toast("open: " + e); }
 }
@@ -575,15 +1366,20 @@ function renderChat() {
     const list = $("messages");
     list.innerHTML = "";
     renderPinnedBanner();
+    const welcome = $("welcome");
     if (!state.selection) {
-        $("chat-title").textContent = "create a room or pick one on The Floor";
+        $("chat-title").textContent = "Welcome";
         $("chat-state").textContent = "";
         $("composerInput").disabled = true;
         $("sendBtn").disabled = true;
         $("attachBtn").disabled = true;
         $("copyInviteBtn").classList.add("hidden");
+        if (welcome) welcome.classList.remove("hidden");
+        list.classList.add("hidden");
         return;
     }
+    if (welcome) welcome.classList.add("hidden");
+    list.classList.remove("hidden");
     if (state.selection.kind === "peer") {
         renderChatPeer(state.selection.key, list);
     } else if (state.selection.kind === "booth") {
@@ -597,17 +1393,13 @@ function renderChat() {
 function renderChatPeer(name, list) {
     const peer = state.peers.find(p => p.name === name);
     $("chat-title").textContent = peer ? (peer.displayName || peer.name) : name;
-    $("chat-state").textContent = peer && peer.connected
-        ? "live"
-        : peer && peer.tailnetOnline
-            ? "online - not yet connected"
-            : "offline";
+    $("chat-state").textContent = peer && peer.connected ? "live" : "offline";
     const canSend = !!(peer && peer.connected);
     $("composerInput").disabled = !canSend;
     $("sendBtn").disabled = !canSend;
     $("attachBtn").disabled = !canSend;
     $("composerInput").placeholder = canSend
-        ? "type a message - **markdown** works..."
+        ? "type a message… Shift+Enter for a new line"
         : "connect to this peer first (or wait for them to come online)";
     for (const item of timelineForPeer(name)) {
         if (item.kind === "msg") renderMessage(item.data, list);
@@ -622,21 +1414,29 @@ function renderChatBooth(boothId, list) {
         return;
     }
     $("chat-title").textContent = booth.name;
-    $("chat-state").textContent = "members: " + (booth.members || []).join(", ");
+    // Show who's actually HERE now (connected members), not the full historical
+    // roster — that roster accumulates everyone who ever joined, including stale
+    // ids from old builds (e.g. the pre-fix default "fliporium-gui").
+    const selfId = state.self && state.self.hostname;
+    const headerMembers = new Set(booth.members || []);
+    const hereNames = state.peers
+        .filter(p => p.connected && p.name !== selfId && headerMembers.has(p.name))
+        .map(p => p.displayName || p.name);
+    $("chat-state").textContent = hereNames.length
+        ? (hereNames.join(", ") + " here")
+        : "just you right now — share the invite link to bring people in";
     $("composerInput").disabled = false;
     $("sendBtn").disabled = false;
     $("attachBtn").disabled = false; // booth-flip
-    $("composerInput").placeholder = "post to " + booth.name + " ...";
-    // also: any flips visible in the booth (cards) — for now flips for booths
-    // arrive as 1:1 flips per member, so we surface flip cards by including
-    // them from each peer's flip list whose peer is also a booth member.
-    const memberSet = new Set(booth.members || []);
-    memberSet.add(boothId); // files parked in the room while empty are keyed by room id
+    $("composerInput").placeholder = "post to " + booth.name + " … Shift+Enter for a new line";
+    // Flip cards for this room, scoped strictly by booth id (each flip carries
+    // the room it was sent in), so files never bleed across rooms sharing a member.
     const flipCards = [];
-    for (const [peerName, m] of state.flipsByPeer) {
-        if (!memberSet.has(peerName)) continue;
+    for (const m of state.flipsByPeer.values()) {
         for (const f of m.values()) {
-            flipCards.push({ kind: "flip", at: f.startedAt || f.at, data: f });
+            if (f.boothId === boothId) {
+                flipCards.push({ kind: "flip", at: f.startedAt || f.at, data: f });
+            }
         }
     }
     const items = timelineForBooth(boothId).concat(flipCards);
@@ -645,80 +1445,7 @@ function renderChatBooth(boothId, list) {
         if (item.kind === "msg") renderMessage(item.data, list);
         else if (item.kind === "flip") renderFlipCard(item.data, list);
     }
-    renderShowtimePanel(boothId);
 }
-
-function renderShowtimePanel(boothId) {
-    const panel = $("showtime-panel");
-    const session = state.showtimeByBooth.get(boothId);
-    if (!session) {
-        panel.classList.add("hidden");
-        panel.innerHTML = "";
-        if (leaderStateInterval) { clearInterval(leaderStateInterval); leaderStateInterval = null; }
-        return;
-    }
-    panel.classList.remove("hidden");
-    const isLeader = session.leader === (state.self && state.self.hostname);
-    const mediaTag = (session.mime || "").startsWith("audio/") ? "audio" : "video";
-    const src = "/catch/" + encodeURIComponent(session.flipId);
-    panel.innerHTML = `
-        <div class="header">
-            <span>SHOWTIME ${isLeader ? "- you're leading" : "- following " + escapeAttr(session.leader)}</span>
-            <span>
-                <span class="title">${escapeAttr(session.filename || session.flipId)}</span>
-                <button onclick="endShowtime('${escapeAttr(session.sessionId)}','${escapeAttr(boothId)}')">end</button>
-            </span>
-        </div>
-        <${mediaTag} id="showtime-media" controls preload="metadata" src="${escapeAttr(src)}"></${mediaTag}>
-    `;
-    const media = $("showtime-media");
-    if (!media) return;
-
-    // Wire leader -> broadcasts state; follower -> obeys incoming state.
-    if (isLeader) {
-        const broadcast = () => {
-            if (suppressNextEvent) { suppressNextEvent = false; return; }
-            window.go.main.App.SendShowtimeState(session.sessionId, boothId, !media.paused, media.currentTime || 0)
-                .catch(e => console.warn("showtime state:", e));
-        };
-        media.addEventListener("play", broadcast);
-        media.addEventListener("pause", broadcast);
-        media.addEventListener("seeked", broadcast);
-        if (leaderStateInterval) clearInterval(leaderStateInterval);
-        leaderStateInterval = setInterval(() => {
-            if (media.readyState >= 1) broadcast();
-        }, SHOWTIME_STATE_INTERVAL_MS);
-    } else {
-        if (leaderStateInterval) { clearInterval(leaderStateInterval); leaderStateInterval = null; }
-        // Apply the current known state immediately if we have one.
-        applyShowtimeState(session);
-    }
-}
-
-function applyShowtimeState(session) {
-    const media = $("showtime-media");
-    if (!media || media.dataset.followingSession !== session.sessionId) {
-        if (media) media.dataset.followingSession = session.sessionId;
-    }
-    if (typeof session.position === "number" &&
-        Math.abs((media.currentTime || 0) - session.position) > SHOWTIME_SYNC_THRESHOLD_SEC) {
-        suppressNextEvent = true;
-        try { media.currentTime = session.position; } catch (e) {}
-    }
-    if (session.playing && media.paused) {
-        suppressNextEvent = true;
-        media.play().catch(() => {});
-    } else if (!session.playing && !media.paused) {
-        suppressNextEvent = true;
-        media.pause();
-    }
-}
-
-async function endShowtime(sessionId, boothId) {
-    try { await window.go.main.App.EndShowtime(sessionId, boothId); }
-    catch (e) { toast("end: " + e); }
-}
-window.endShowtime = endShowtime;
 
 async function selectPeer(name) {
     state.selection = { kind: "peer", key: name };
@@ -745,12 +1472,6 @@ async function selectPeer(name) {
     }
 
     renderChat();
-
-    const peer = state.peers.find(p => p.name === name);
-    if (peer && peer.tailnetOnline && !peer.connected) {
-        try { await window.go.main.App.Connect(name); }
-        catch (e) { toast("connect: " + e); }
-    }
 }
 
 async function selectBooth(boothId) {
@@ -790,7 +1511,7 @@ function appendMessage(m) {
             renderMessage(m, $("messages"));
             $("messages").scrollTop = $("messages").scrollHeight;
         } else if (m.direction === "in") {
-            state.unreadBooths.add(m.boothId);
+            state.unreadBooths.set(m.boothId, (state.unreadBooths.get(m.boothId) || 0) + 1);
             renderFloor();
         }
         return;
@@ -801,7 +1522,7 @@ function appendMessage(m) {
         renderMessage(m, $("messages"));
         $("messages").scrollTop = $("messages").scrollHeight;
     } else if (m.direction === "in") {
-        state.unread.add(m.peer);
+        state.unread.set(m.peer, (state.unread.get(m.peer) || 0) + 1);
         renderFloor();
     }
 }
@@ -813,7 +1534,8 @@ function upsertFlip(f) {
         renderFlipCard(f, $("messages"));
         $("messages").scrollTop = $("messages").scrollHeight;
     } else if (f.direction === "in" && f.status === "complete") {
-        state.unread.add(f.peer);
+        if (f.boothId) state.unreadBooths.set(f.boothId, (state.unreadBooths.get(f.boothId) || 0) + 1);
+        else state.unread.set(f.peer, (state.unread.get(f.peer) || 0) + 1);
         renderFloor();
     }
 }
@@ -888,13 +1610,27 @@ function upsertBooth(b) {
     renderFloor();
 }
 
+// removeBoothLocal drops a room from the UI after a leave/delete/decline.
+function removeBoothLocal(id) {
+    state.booths = state.booths.filter(b => b.id !== id);
+    state.msgsByBooth.delete(id);
+    state.unreadBooths.delete(id);
+    if (isBoothSelected(id)) {
+        state.selection = null;
+        renderChat();
+    }
+    renderFloor();
+}
+
 // ---------- top bar / self ----------
 
 function renderSelf() {
     const el = $("selfName");
+    const av = $("selfAvatar");
     if (!state.self) {
         el.textContent = "starting...";
         $("selfDot").className = "dot offline";
+        if (av) av.innerHTML = "";
         $("selfIp").textContent = "";
         return;
     }
@@ -903,6 +1639,10 @@ function renderSelf() {
     el.style.cursor = "pointer";
     el.onclick = editDisplayName;
     $("selfDot").className = "dot " + (state.self.online ? "connected" : "offline");
+    if (av) {
+        fillAvatar(av, state.self.hostname, state.self.displayName);
+        av.title = "change your picture in Backstage";
+    }
     $("selfIp").textContent = "";
 }
 
@@ -939,8 +1679,8 @@ function closeBackstage() { $("backstage").classList.add("hidden"); }
 async function paintBackstage() {
     // Self
     if (state.self) {
-        const ip = (state.self.ips && state.self.ips[0]) ? state.self.ips[0] : "";
-        $("bs-self").innerHTML = `<strong>${escapeAttr(state.self.hostname || "")}</strong> &mdash; ${escapeAttr(ip)}`;
+        $("bs-self").innerHTML = `<strong>${escapeAttr(state.self.displayName || state.self.hostname || "")}</strong>`;
+        fillAvatar($("bs-avatar"), state.self.hostname, state.self.displayName);
     }
     // Theme
     let theme = "dark";
@@ -954,6 +1694,41 @@ async function paintBackstage() {
     await refreshTwin();
     $("bs-twin-input").value = currentTwin || "";
     $("bs-twin-current").textContent = currentTwin ? ("currently paired with " + currentTwin) : "not paired";
+    // Blocked
+    try {
+        const blocked = await window.go.main.App.ListBlocked();
+        renderBlockedList(blocked || []);
+    } catch (e) { renderBlockedList([]); }
+}
+
+function renderBlockedList(list) {
+    const el = $("bs-blocked");
+    if (!el) return;
+    if (!list.length) {
+        el.innerHTML = `<div class="bs-hint">No one blocked.</div>`;
+        return;
+    }
+    el.innerHTML = "";
+    for (const p of list) {
+        const row = document.createElement("div");
+        row.className = "bs-row";
+        const label = document.createElement("span");
+        label.style.flex = "1";
+        label.style.minWidth = "0";
+        label.style.overflow = "hidden";
+        label.style.textOverflow = "ellipsis";
+        label.textContent = p.displayName || p.name;
+        const btn = document.createElement("button");
+        btn.className = "ghost";
+        btn.textContent = "unblock";
+        btn.addEventListener("click", async () => {
+            try { await window.go.main.App.UnblockPeer(p.name); paintBackstage(); }
+            catch (e) { toast("unblock: " + e); }
+        });
+        row.appendChild(label);
+        row.appendChild(btn);
+        el.appendChild(row);
+    }
 }
 
 // ---------- search ----------
@@ -1020,9 +1795,17 @@ function renderSearchResults(hits) {
             ? `Booth · ${escapeAttr((state.booths.find(b => b.id === h.boothId)?.name) || h.boothId.slice(0, 8))}`
             : (h.direction === "out" ? `to ${escapeAttr(h.peer)}` : `from ${escapeAttr(h.peer)}`);
         const when = shortTime(h.at);
+        // The FTS snippet wraps matches in sentinel control chars (\x02 .. \x03)
+        // rather than real <mark> tags, so we HTML-escape the whole thing
+        // (closing the XSS hole where message text would be raw HTML) and only
+        // THEN turn the sentinels into <mark>.
+        const openMark = String.fromCharCode(2), closeMark = String.fromCharCode(3);
+        const snip = h.snippet
+            ? escapeAttr(h.snippet).split(openMark).join("<mark>").split(closeMark).join("</mark>")
+            : escapeAttr((h.text || "").slice(0, 120));
         div.innerHTML = `
             <div class="where">${where} · ${escapeAttr(when)}</div>
-            <div class="snippet">${h.snippet || escapeAttr((h.text || "").slice(0, 120))}</div>
+            <div class="snippet">${snip}</div>
         `;
         div.addEventListener("click", () => {
             closeSearch();
@@ -1038,6 +1821,22 @@ function renderSearchResults(hits) {
 function bindBackstage() {
     $("backstageBtn").addEventListener("click", openBackstage);
     $("bs-close").addEventListener("click", closeBackstage);
+    $("bs-avatar-pick").addEventListener("click", async () => {
+        try {
+            const uri = await window.go.main.App.PickAvatar();
+            if (state.self) state.self.avatar = uri || "";
+            renderSelf(); paintBackstage(); renderFloor(); renderChat();
+            if (uri) toast("picture updated — friends see it on reconnect");
+        } catch (e) { toast("couldn't set picture: " + e); }
+    });
+    $("bs-avatar-clear").addEventListener("click", async () => {
+        try {
+            await window.go.main.App.ClearAvatar();
+            if (state.self) state.self.avatar = "";
+            renderSelf(); paintBackstage(); renderFloor(); renderChat();
+            toast("picture removed");
+        } catch (e) { toast("couldn't remove picture: " + e); }
+    });
     document.querySelectorAll('input[name="theme"]').forEach(r => {
         r.addEventListener("change", async () => {
             const t = r.value;
@@ -1142,7 +1941,7 @@ const TOUR_STEPS = [
     { icon: "🎪", title: "Welcome to Fliporium", body: "A small private place for you and the people you care about. Create a room, share the invite link, and your chats and files go peer-to-peer — straight between your devices." },
     { icon: "🪁", title: "Flip a file", body: "Drag any file onto a peer's chat to send it. There's no size cap. Files land in the other person's Catch folder, right next to their copy of the app." },
     { icon: "📥", title: "Catch", body: "Caught files render inline when they can — images, video, audio, PDFs, code. Click 'open' to hand them off to your default app." },
-    { icon: "🎪", title: "Booths", body: "A Booth is a named group room. Anyone in a Booth can post, drop files, take notes together, or fire up a Watch Party. The + next to BOOTHS makes a new one." },
+    { icon: "🎪", title: "Booths", body: "A Booth is a named group room. Share its invite link and everyone who has it can chat and flip files together. The + next to Rooms starts a new one." },
 ];
 let tourStep = 0;
 
@@ -1187,6 +1986,47 @@ async function maybeShowTourOnBoot() {
     } catch (e) {}
 }
 
+// ---------- first-launch name prompt ----------
+
+function showNameError(msg) {
+    const el = $("name-error");
+    el.textContent = msg;
+    el.classList.remove("hidden");
+}
+
+function bindNameSetup() {
+    const submit = async () => {
+        const v = $("name-input").value.trim();
+        if (!v) { showNameError("pick a name — anything you like"); return; }
+        try {
+            await window.go.main.App.SetDisplayName(v);
+            if (state.self) state.self.displayName = v;
+            renderSelf();
+        } catch (e) { showNameError(String(e)); return; }
+        $("name-overlay").classList.add("hidden");
+        maybeShowTourOnBoot();
+    };
+    $("name-go").addEventListener("click", submit);
+    $("name-input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); submit(); }
+    });
+}
+
+// maybeFirstRun shows the name prompt the very first time (no name chosen yet);
+// otherwise it goes straight to the tour. Gating on an unset display_name means
+// existing installs (which never persisted a name — they were borrowing the OS
+// username) also get prompted once.
+async function maybeFirstRun() {
+    let name = "";
+    try { name = await window.go.main.App.GetPref("display_name"); } catch (e) {}
+    if (!name) {
+        $("name-overlay").classList.remove("hidden");
+        $("name-input").focus();
+    } else {
+        maybeShowTourOnBoot();
+    }
+}
+
 // ---------- notification sound ----------
 
 let audioCtx = null;
@@ -1220,7 +2060,7 @@ async function maybeChime() {
 function confettiBurst(count = 60) {
     const layer = $("confetti-layer");
     if (!layer) return;
-    const colors = ["#c9a7ff", "#4ade80", "#ffd166", "#ef4444", "#5bc0eb"];
+    const colors = ["#5cb2f2", "#4ade80", "#ffd166", "#ef4444", "#5bc0eb"];
     for (let i = 0; i < count; i++) {
         const p = document.createElement("div");
         p.className = "confetti-piece";
@@ -1236,6 +2076,15 @@ function confettiBurst(count = 60) {
 
 // ---------- composer + attach + drop ----------
 
+// autoGrowComposer resizes the message textarea to fit its content, up to a cap
+// (then it scrolls). Called on input and after sending/clearing.
+function autoGrowComposer() {
+    const ci = $("composerInput");
+    if (!ci) return;
+    ci.style.height = "auto";
+    ci.style.height = Math.min(ci.scrollHeight, 160) + "px";
+}
+
 function bindComposer() {
     $("composer").addEventListener("submit", async (ev) => {
         ev.preventDefault();
@@ -1244,25 +2093,48 @@ function bindComposer() {
         const replyTo = state.replyingTo ? state.replyingTo.uuid : "";
         try {
             if (state.selection.kind === "booth") {
-                // Booth replies not yet supported on the Go side as a distinct
-                // method; the BoothMessage carries no parentUUID. For now, just
-                // dispatch as a normal booth message and clear the reply state.
-                await window.go.main.App.SendBoothMessage(state.selection.key, text);
+                await window.go.main.App.SendBoothMessage(state.selection.key, text, replyTo);
+            } else if (replyTo) {
+                await window.go.main.App.SendReply(state.selection.key, text, replyTo);
             } else {
-                if (replyTo) {
-                    await window.go.main.App.SendReply(state.selection.key, text, replyTo);
-                } else {
-                    await window.go.main.App.SendMessage(state.selection.key, text);
-                }
+                await window.go.main.App.SendMessage(state.selection.key, text);
             }
             $("composerInput").value = "";
+            autoGrowComposer();
             cancelReply();
         } catch (e) {
             toast("send: " + e);
         }
     });
 
+    const composerInput = $("composerInput");
+    composerInput.addEventListener("input", autoGrowComposer);
+    composerInput.addEventListener("keydown", (e) => {
+        // Enter sends; Shift+Enter inserts a newline (for multi-line messages and
+        // code fences). isComposing guards against submitting mid-IME-composition.
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+            e.preventDefault();
+            $("composer").requestSubmit();
+        }
+    });
+
     $("reply-cancel").addEventListener("click", cancelReply);
+
+    // Paste an image straight into the chat: route it to a flip rather than the
+    // text field. Plain-text paste falls through to default behavior.
+    $("composerInput").addEventListener("paste", async (e) => {
+        const items = (e.clipboardData && e.clipboardData.items) || [];
+        for (const it of items) {
+            if (it.kind === "file" && it.type && it.type.startsWith("image/")) {
+                const blob = it.getAsFile();
+                if (blob) {
+                    e.preventDefault();
+                    await sendImageBlob(blob, it.type);
+                    return;
+                }
+            }
+        }
+    });
 
     $("attachBtn").addEventListener("click", async () => {
         if (!state.selection) return;
@@ -1403,10 +2275,11 @@ function bindEvents() {
 
     window.runtime.EventsOn("message", (m) => {
         appendMessage(m);
-        // Chime if this is an inbound message for a chat we're not currently viewing.
+        // Chime if this is an inbound message for a chat we're not currently
+        // viewing — unless that conversation is muted.
         if (m.direction === "in") {
             const focused = (m.boothId && isBoothSelected(m.boothId)) || (!m.boothId && isPeerSelected(m.peer));
-            if (!focused) maybeChime();
+            if (!focused && !conversationMuted(m)) maybeChime();
         }
     });
 
@@ -1414,6 +2287,7 @@ function bindEvents() {
     window.runtime.EventsOn("message-edited", (e) => applyMessageEdit(e));
     window.runtime.EventsOn("message-deleted", (d) => applyMessageDelete(d));
     window.runtime.EventsOn("message-pinned", (p) => applyMessagePin(p));
+    window.runtime.EventsOn("message-card", (mc) => applyMessageCard(mc));
     window.runtime.EventsOn("peer-status", (s) => {
         state.peerStatus.set(s.peer, s.status);
         renderFloor();
@@ -1423,33 +2297,9 @@ function bindEvents() {
     window.runtime.EventsOn("notice", (msg) => toast(msg, 4000));
 
     window.runtime.EventsOn("booth", (b) => upsertBooth(b));
-
-    window.runtime.EventsOn("showtime-started", (s) => {
-        state.showtimeByBooth.set(s.boothId, {
-            sessionId: s.sessionId,
-            flipId: s.flipId,
-            leader: s.leader,
-            filename: s.filename,
-            mime: s.mime,
-            position: 0,
-            playing: false,
-        });
-        if (isBoothSelected(s.boothId)) renderShowtimePanel(s.boothId);
-        else toast("Showtime in " + (state.booths.find(b => b.id === s.boothId)?.name || s.boothId) + " - " + (s.filename || s.flipId));
-    });
-
-    window.runtime.EventsOn("showtime-state", (s) => {
-        const session = state.showtimeByBooth.get(s.boothId);
-        if (!session || session.sessionId !== s.sessionId) return;
-        session.playing = s.playing;
-        session.position = s.position;
-        if (isBoothSelected(s.boothId)) applyShowtimeState(session);
-    });
-
-    window.runtime.EventsOn("showtime-ended", (s) => {
-        state.showtimeByBooth.delete(s.boothId);
-        if (isBoothSelected(s.boothId)) renderShowtimePanel(s.boothId);
-    });
+    window.runtime.EventsOn("booth-removed", (id) => removeBoothLocal(id));
+    window.runtime.EventsOn("blocklist-changed", () => { refreshPeers(); });
+    window.runtime.EventsOn("invite-resolved", () => { refreshBooths(); });
 
     window.runtime.EventsOn("flip-progress", (p) => {
         updateFlipProgress(p.id, p.peer, p.bytes, p.size);
@@ -1468,6 +2318,7 @@ function bindEvents() {
 
 async function boot() {
     await loadTheme();
+    await loadMuted();
     bindComposer();
     bindSearch();
     bindBackstage();
@@ -1475,9 +2326,26 @@ async function boot() {
     bindDragDrop();
     bindEvents();
     bindStatusTracking();
+    bindContextMenu();
+    bindNameSetup();
+    bindFloorFilter();
+    bindHelp();
+    bindWindowControls();
+    // Open http(s) links (markdown links and linkified bare URLs) in the OS
+    // browser instead of navigating the app's own webview.
+    document.addEventListener("click", (e) => {
+        const a = e.target.closest && e.target.closest('a[href]');
+        if (!a) return;
+        const href = a.getAttribute("href");
+        if (externalURL(href)) {
+            e.preventDefault();
+            openExternal(href);
+        } else {
+            e.preventDefault();
+        }
+    });
     renderSelf();
     refreshTwin();
-    maybeShowTourOnBoot();
 
     try {
         const status = await window.go.main.App.Status();
@@ -1491,6 +2359,8 @@ async function boot() {
             toast(status.message, 4000);
         }
     } catch (e) { console.warn("initial status:", e); }
+
+    await maybeFirstRun();
 
     setInterval(refreshPeers, 15000);
     setInterval(refreshBooths, 30000);

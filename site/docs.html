@@ -3,20 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Fliporium Docs — Setup, Invites, Rooms, File Flips & Watch Parties</title>
-<meta name="description" content="The complete Fliporium guide: install the Windows app, invite friends by QR or link, create Rooms for group chat, flip files peer-to-peer, run synced watch parties, pair devices with twin mode, and search your history. Plus troubleshooting and FAQ.">
-<meta name="keywords" content="Fliporium guide, how to invite friends, invite link rooms, send files peer to peer, watch party setup, twin mode device sync, end-to-end encrypted chat">
+<title>How to Send Files & Make Private Chat Rooms — Fliporium Docs</title>
+<meta name="description" content="The complete Fliporium guide: install the Windows app, invite friends with a link, create private chat rooms, send large files peer-to-peer, pair devices with Twin Mode, and search your history. Plus troubleshooting and FAQ.">
 <meta name="theme-color" content="#131318">
 <link rel="canonical" href="https://fliporium.com/docs">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Fliporium">
-<meta property="og:title" content="Fliporium Docs — Setup, Invites, Rooms, File Flips & Watch Parties">
-<meta property="og:description" content="The complete guide: install, invite friends, Rooms for group chat, peer-to-peer file flips, synced watch parties, twin mode, search, troubleshooting, and FAQ.">
+<meta property="og:title" content="Fliporium Docs — Send Files & Create Private Chat Rooms">
+<meta property="og:description" content="How to install Fliporium, invite friends, create private rooms, send large files peer-to-peer, pair devices with Twin Mode, search your history, plus troubleshooting and FAQ.">
 <meta property="og:image" content="https://fliporium.com/og.png">
 <meta property="og:url" content="https://fliporium.com/docs">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Fliporium Docs — Setup, Invites, Rooms, File Flips & Watch Parties">
-<meta name="twitter:description" content="Install, invite friends, Rooms, peer-to-peer file flips, synced watch parties, twin mode, troubleshooting, and FAQ.">
+<meta name="twitter:title" content="Fliporium Docs — Send Files & Create Private Chat Rooms">
+<meta name="twitter:description" content="Install, invite friends, create private rooms, send large files peer-to-peer, Twin Mode, search, troubleshooting, and FAQ.">
 <meta name="twitter:image" content="https://fliporium.com/og.png">
 <link rel="icon" href="/favicon.ico">
 <link rel="stylesheet" href="/style.css">
@@ -54,7 +53,6 @@
         <li><a href="#chat">Chatting one-to-one</a></li>
         <li><a href="#rooms">Rooms</a></li>
         <li><a href="#flips">Flipping files</a></li>
-        <li><a href="#showtime">Showtime (watch together)</a></li>
         <li><a href="#twin">Twin mode (same person, two devices)</a></li>
         <li><a href="#search">Search</a></li>
         <li><a href="#backstage">Backstage (settings)</a></li>
@@ -94,13 +92,11 @@
     <dt>Marquee</dt>
     <dd>The top strip. Brand on the left, your own info and Backstage on the right.</dd>
     <dt>Room</dt>
-    <dd>A small private space you create and invite people to by link. Everyone with the link is in. Has its own message history and watch-party slot.</dd>
+    <dd>A small private space you create and invite people to by link. Everyone with the link is in. Has its own message history.</dd>
     <dt>Flip</dt>
     <dd>To send a file. &ldquo;Flip me that picture&rdquo; = drag-and-drop or use the <em>flip</em> button.</dd>
     <dt>Catch</dt>
     <dd>To receive a flipped file. The file lands in your <code>fliporium-data/inbox/</code> folder; click the file in chat to open it.</dd>
-    <dt>Showtime</dt>
-    <dd>A synchronized watch-party inside a room. Whoever started it is the leader; everyone else syncs to their play/pause.</dd>
     <dt>Backstage</dt>
     <dd>Your settings drawer. Theme, sounds, twin pairing, invites, danger zone.</dd>
     <dt>Twin</dt>
@@ -176,7 +172,6 @@
 </p>
 <ul>
     <li>Its own message history</li>
-    <li>A <strong>Showtime</strong> slot for watching a video together</li>
 </ul>
 <p>
     Inviting a new member to an existing room: open the room, type
@@ -195,19 +190,6 @@
     <li>Caught files are saved under <code>fliporium-data/inbox/</code>.</li>
     <li>Click a flipped file in chat to open it with whatever app Windows uses for that file type.</li>
     <li>Drag a file onto a room instead of a peer to flip it to everyone in the room at once.</li>
-</ul>
-
-<h2 id="showtime">Showtime (watch together)</h2>
-<p>
-    Inside a room, flip a video file. Once it lands on everyone's disk, click
-    <strong>Start Showtime</strong> at the top of the room. A video player
-    appears for everyone.
-</p>
-<ul>
-    <li>Whoever pressed Start is the <strong>leader</strong>.</li>
-    <li>When the leader pauses, everyone pauses.</li>
-    <li>When the leader seeks, everyone seeks within a one-second tolerance.</li>
-    <li>Anyone can <strong>End Showtime</strong> at any time.</li>
 </ul>
 
 <h2 id="twin">Twin mode (same person, two devices)</h2>
@@ -258,7 +240,6 @@
 <ul>
     <li>What you said.</li>
     <li>What files you flipped.</li>
-    <li>What you watched in Showtime.</li>
 </ul>
 <p>
     Everything in the &ldquo;cannot see&rdquo; list is sealed with a key that
@@ -301,8 +282,9 @@
 
 <h3>Is this open source?</h3>
 <p>
-    The source lives in a private repository today. If there's interest, we'll
-    open it.
+    Yes — the full source is on GitHub at
+    <a href="https://github.com/aivrar/fliporium-p2p" rel="noopener noreferrer">github.com/aivrar/fliporium-p2p</a>,
+    under the MIT license. You can read it, build it, or run your own signaling server.
 </p>
 
 <h3>Does Fliporium work on macOS or Linux?</h3>
@@ -343,6 +325,12 @@
     friends-and-family deployment, get in touch.
 </p>
 
+<p class="doc-foot-cta">
+    That's the whole tour. Head back to <a href="/">the Fliporium homepage</a>,
+    or <a href="/dl/fliporium.exe">download Fliporium for Windows</a> and start
+    your first room.
+</p>
+
 </article>
 
 </main>
@@ -375,7 +363,7 @@
       "name": "Is Fliporium open source?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "The source lives in a private repository today. If there's interest, we'll open it."
+        "text": "Yes, the full source is on GitHub at github.com/aivrar/fliporium-p2p under the MIT license. You can read it, build it, or run your own signaling server."
       }
     },
     {

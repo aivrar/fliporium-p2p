@@ -3,19 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Fliporium Privacy — End-to-End Encrypted, No Accounts, No Tracking</title>
-<meta name="description" content="Fliporium's privacy model in plain language: no ads, no third-party trackers, no cookies, no message logging. Your chats, files, and watch parties are end-to-end encrypted — the signaling server introduces peers but can never read what they send.">
-<meta name="keywords" content="private messaging privacy, end to end encrypted chat, no tracking, no cookies, encrypted file sharing, what data is collected">
+<title>End-to-End Encrypted Chat, No Tracking — Fliporium</title>
+<meta name="description" content="Fliporium's privacy model in plain language: no ads, no trackers, no cookies, no message logging, no phone number. Your chats and files are end-to-end encrypted — the server connects peers but can never read what they send.">
 <meta name="theme-color" content="#131318">
 <link rel="canonical" href="https://fliporium.com/privacy">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Fliporium">
-<meta property="og:title" content="Fliporium Privacy — End-to-End Encrypted, No Accounts, No Tracking">
-<meta property="og:description" content="No ads, no third-party trackers, no cookies, no message logging. Chats, files, and watch parties are end-to-end encrypted directly between devices — the server can't read them.">
+<meta property="og:title" content="Fliporium — End-to-End Encrypted Chat, No Tracking">
+<meta property="og:description" content="No ads, no trackers, no cookies, no message logging. Your chats and files are end-to-end encrypted directly between devices — the server can't read them.">
 <meta property="og:image" content="https://fliporium.com/og.png">
 <meta property="og:url" content="https://fliporium.com/privacy">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Fliporium Privacy — End-to-End Encrypted, No Accounts, No Tracking">
+<meta name="twitter:title" content="Fliporium — End-to-End Encrypted Chat, No Tracking">
 <meta name="twitter:description" content="No ads, no trackers, no cookies, no message logging. End-to-end encrypted directly between devices.">
 <meta name="twitter:image" content="https://fliporium.com/og.png">
 <link rel="icon" href="/favicon.ico">
@@ -76,11 +75,11 @@
 
 <h2>What we can't see, ever</h2>
 <p>
-    Once two peers connect, chat, files, and Showtime flow directly
+    Once two peers connect, chat and files flow directly
     between their devices over an encrypted channel. On top of that, every
     room's traffic is sealed with a key carried in the room's invite link —
-    a key that lives in the link's <code>#</code> fragment, which your browser
-    never sends to us, and which our servers never receive. So even the parts
+    it lives in the link's <code>#</code> fragment, which never reaches our
+    servers. So even the parts
     that <em>do</em> pass through us — the offline backlog and any
     TURN-relayed traffic — are ciphertext we can't open. We cannot intercept,
     decrypt, or log any of the following, regardless of what someone might ask
@@ -89,7 +88,6 @@
 <ul>
     <li>The contents of your messages.</li>
     <li>The files you flipped (or even that a flip happened).</li>
-    <li>What you watched in Showtime.</li>
     <li>Your reactions, edits, deletes, or pins.</li>
 </ul>
 <p>

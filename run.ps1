@@ -1,59 +1,36 @@
-# Launch the Fliporium GUI with sensible defaults.
+# Launch the Fliporium GUI.
 #
-# The first launch needs a Headscale pre-auth key (stored at .preauth-test for
-# this dev session). Subsequent launches reuse the saved tailnet identity in
-# the data dir, so no auth key is needed again.
+# Identity and chat history live in the data dir; each data dir is its own
+# independent install with a separate Ed25519 identity, generated on first
+# launch. No auth key or signup -- paste an invite link (or create a room)
+# from inside the app.
 #
 # Usage:
-#   .\run.ps1                          # launch GUI as hostname 'fliporium' with data in .\fliporium-data
-#   .\run.ps1 -Hostname my-node        # custom tailnet hostname
-#   .\run.ps1 -DataDir D:\my-data      # custom identity/data folder
-#   .\run.ps1 -Cli                     # run the CLI peer instead (REPL in this window)
+#   .\run.ps1                  # default data dir (fliporium-data next to the exe)
+#   .\run.ps1 -Name alice      # data dir fliporium-data-alice -- handy for
+#                              #   running a second independent instance locally
+#   .\run.ps1 -DataDir D:\foo  # explicit data/identity folder
 
 param(
-    [string]$Hostname,
-    [string]$DataDir,
-    [switch]$Cli
+    [string]$Name,
+    [string]$DataDir
 )
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $Hostname) { $Hostname = if ($Cli) { 'fliporium-cli' } else { 'fliporium' } }
-if (-not $DataDir) { $DataDir = Join-Path $PSScriptRoot ("fliporium-data-" + $Hostname) }
-
-$env:FLIPORIUM_HOSTNAME = $Hostname
-$env:FLIPORIUM_DIR = $DataDir
-
-# Provide an auth key only on first run (when no tailscaled.state exists yet).
-$stateFile = Join-Path $DataDir 'tailscaled.state'
-if (-not (Test-Path $stateFile)) {
-    $preauth = Join-Path $PSScriptRoot '.preauth-test'
-    if (Test-Path $preauth) {
-        $line = (Get-Content $preauth | Where-Object { $_ -match '^PREAUTH_KEY=' } | Select-Object -First 1)
-        if ($line) {
-            $env:FLIPORIUM_AUTHKEY = ($line -replace '^PREAUTH_KEY=', '')
-            Write-Host "First-run auth key loaded from .preauth-test" -ForegroundColor DarkGray
-        } else {
-            Write-Warning "First run but no PREAUTH_KEY= found in .preauth-test"
-        }
-    }
+if (-not $DataDir -and $Name) {
+    $DataDir = Join-Path $PSScriptRoot ("fliporium-data-" + $Name)
 }
+if ($DataDir) { $env:FLIPORIUM_DIR = $DataDir }
 
-$exeName = if ($Cli) { 'fliporium-cli.exe' } else { 'fliporium.exe' }
-$exe = Join-Path $PSScriptRoot $exeName
-
+$exe = Join-Path $PSScriptRoot 'fliporium.exe'
 if (-not (Test-Path $exe)) {
-    Write-Host "$exeName not built; running build.ps1..." -ForegroundColor Cyan
-    & (Join-Path $PSScriptRoot 'build.ps1') $(if ($Cli) { '-Cli' } else { '-Gui' })
+    Write-Host "fliporium.exe not built; running build.ps1..." -ForegroundColor Cyan
+    & (Join-Path $PSScriptRoot 'build.ps1') -Gui
 }
 
-$launchMsg = "Launching ${exeName} -- hostname=${Hostname} dir=${DataDir}"
-Write-Host $launchMsg -ForegroundColor Cyan
+$dirMsg = if ($DataDir) { $DataDir } else { 'fliporium-data (default)' }
+Write-Host "Launching fliporium.exe -- dir=$dirMsg" -ForegroundColor Cyan
 
-if ($Cli) {
-    # CLI runs in this window so the REPL is usable.
-    & $exe
-} else {
-    # GUI runs detached.
-    Start-Process -FilePath $exe
-}
+# GUI runs detached so this window returns to the prompt.
+Start-Process -FilePath $exe

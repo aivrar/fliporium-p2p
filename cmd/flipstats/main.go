@@ -3,16 +3,16 @@
 //
 // It deliberately keeps zero per-visit state. The download counter is a single
 // monotonic integer on disk; we never record IPs, never set cookies, never
-// fingerprint. The node counts come from `headscale nodes list -o json` run
-// every 30 seconds.
+// fingerprint. The live room/peer counts come from the signaling server's
+// /stats endpoint, polled every 30 seconds.
 //
 // Flags:
 //
 //	-listen          HTTP listen address (default :8088)
 //	-data            Directory for the counter file (default /var/lib/flipstats)
 //	-exe             Path to the .exe to serve at /dl/fliporium.exe
-//	-headscale       Path to the headscale binary (default /usr/local/bin/headscale)
-//	-headscale-cfg   Path to the headscale config (default /etc/headscale/config.yaml)
+//	-signal-stats    flipsignal /stats URL for live room/peer counts
+//	-trusted-proxy   IP allowed to set X-Forwarded-For (usually Caddy on localhost)
 //
 // Behind the scenes Caddy reverse-proxies /api/stats, /api/contact, and /dl/
 // to this. Static HTML/CSS is served by Caddy directly from /var/www/fliporium.
@@ -43,11 +43,11 @@ import (
 )
 
 var (
-	listenAddr    = flag.String("listen", ":8088", "HTTP listen address")
-	dataDir       = flag.String("data", "/var/lib/flipstats", "Directory for the persistent counter")
-	exePath       = flag.String("exe", "/var/www/fliporium/dl/fliporium.exe", "Path to the .exe to serve")
-	signalStats   = flag.String("signal-stats", "http://127.0.0.1:8090/stats", "flipsignal /stats URL for live room/peer counts")
-	trustedProxy  = flag.String("trusted-proxy", "127.0.0.1", "IP allowed to set X-Forwarded-For; usually Caddy on localhost")
+	listenAddr   = flag.String("listen", ":8088", "HTTP listen address")
+	dataDir      = flag.String("data", "/var/lib/flipstats", "Directory for the persistent counter")
+	exePath      = flag.String("exe", "/var/www/fliporium/dl/fliporium.exe", "Path to the .exe to serve")
+	signalStats  = flag.String("signal-stats", "http://127.0.0.1:8090/stats", "flipsignal /stats URL for live room/peer counts")
+	trustedProxy = flag.String("trusted-proxy", "127.0.0.1", "IP allowed to set X-Forwarded-For; usually Caddy on localhost")
 )
 
 // SMTP relay config, read from the environment (set via the systemd
@@ -272,7 +272,7 @@ func saveCounter(n int64) error {
 	return os.Rename(tmp, path)
 }
 
-// ---------- headscale polling ----------
+// ---------- signaling-server polling ----------
 
 func pollLoop() {
 	t := time.NewTicker(pollInterval)

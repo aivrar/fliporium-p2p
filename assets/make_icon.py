@@ -7,7 +7,7 @@ Design rules:
     interior detail. The interior detail (stripe-rays, banner, entrance)
     only appears at >=48px and gets progressively richer up to 256px.
   - Transparent background; equally legible on light and dark OS themes.
-  - Brand purple #c9a7ff as the primary stripe, warm cream #fff5d1 as the
+  - Brand circus blue #5cb2f2 as the primary stripe, warm cream #fff5d1 as the
     secondary stripe, accent green #4ade80 on the flag.
 """
 
@@ -15,11 +15,11 @@ from PIL import Image, ImageDraw
 import math
 import os
 
-PURPLE = (201, 167, 255, 255)   # #c9a7ff -- Fliporium primary
-PURPLE_DARK = (91, 58, 163, 255) # #5b3aa3 -- pole, outline
+PURPLE = (92, 178, 242, 255)    # #5cb2f2 -- Fliporium circus blue (primary stripe)
+PURPLE_DARK = (29, 111, 192, 255) # #1d6fc0 -- pole, outline (deep blue)
 CREAM = (255, 245, 209, 255)    # #fff5d1 -- secondary stripe
 GREEN = (74, 222, 128, 255)     # #4ade80 -- connection-OK accent, flag
-SHADOW = (40, 30, 70, 60)       # subtle drop shadow
+SHADOW = (14, 34, 56, 60)       # subtle blue-tinted drop shadow
 
 ASSETS_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -163,16 +163,12 @@ def main():
         img.save(out, "PNG")
         print(f"wrote {out}")
 
-    # Bundle .ico from a curated subset (Windows convention).
+    # Bundle .ico from a curated subset (Windows convention). Build from the
+    # 256px base so PIL can emit every size: saving from the smallest image (the
+    # old bug) produced a 16x16-only .ico that looked blurry in the taskbar.
     ico_sizes = [16, 24, 32, 48, 64, 128, 256]
-    ico_imgs = [pngs[sz] for sz in ico_sizes]
     ico_path = os.path.join(ASSETS_DIR, "fliporium.ico")
-    ico_imgs[0].save(
-        ico_path,
-        format="ICO",
-        sizes=[(sz, sz) for sz in ico_sizes],
-        append_images=ico_imgs[1:],
-    )
+    pngs[256].save(ico_path, format="ICO", sizes=[(sz, sz) for sz in ico_sizes])
     print(f"wrote {ico_path}")
 
     # Also a 512px hero for og:image, social cards, etc.

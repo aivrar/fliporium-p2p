@@ -11,18 +11,6 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-// DefaultSTUN is Google's public STUN server — fine for the proof. Production
-// adds a TURN relay (minted by the signaling server) for hard NATs.
-var DefaultSTUN = []string{"stun:stun.l.google.com:19302"}
-
-// STUNServers builds an ICE server list from STUN URLs (no credentials).
-func STUNServers(urls []string) []webrtc.ICEServer {
-	if len(urls) == 0 {
-		return nil
-	}
-	return []webrtc.ICEServer{{URLs: urls}}
-}
-
 // Connect establishes a single WebRTC peer connection to `remote` and returns
 // the opened DataChannel as an io.ReadWriteCloser (detached), so callers can
 // run the existing peer.WriteFrame / peer.ReadFrame protocol over it.

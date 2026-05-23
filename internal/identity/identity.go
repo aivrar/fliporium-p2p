@@ -52,7 +52,15 @@ func Load(dir string) (Identity, error) {
 // ID is the short, stable fingerprint of the public key (16 hex chars). Used
 // as the peer id at the signaling and routing layers.
 func (i Identity) ID() string {
-	sum := sha256.Sum256(i.Pub)
+	return FingerprintID(i.Pub)
+}
+
+// FingerprintID derives the short, stable id from any Ed25519 public key. The
+// peer-auth handshake uses it to verify that a peer claiming "fp-<id>" actually
+// holds the matching key (sha256 over 8 bytes = 64-bit binding; forging a key
+// with a chosen fingerprint is infeasible), which is what stops impersonation.
+func FingerprintID(pub ed25519.PublicKey) string {
+	sum := sha256.Sum256(pub)
 	return hex.EncodeToString(sum[:8])
 }
 

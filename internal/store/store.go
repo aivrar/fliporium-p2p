@@ -44,6 +44,7 @@ type Message struct {
 	EditedAt   time.Time // zero if never edited
 	DeletedAt  time.Time // zero if not tombstoned
 	Pinned     bool
+	Card       string // JSON of an unfurled link card, "" if none
 }
 
 // Reaction is one (message, peer, emoji) tuple. The same peer reacting with
@@ -59,6 +60,7 @@ type Reaction struct {
 type PeerRecord struct {
 	Name      string
 	Display   string // friendly name announced via HELLO ("" if unknown)
+	Avatar    string // avatar data URI announced via HELLO ("" if none)
 	FirstSeen time.Time
 	LastSeen  time.Time
 }
@@ -105,6 +107,7 @@ type FlipRecord struct {
 	Status      string
 	StartedAt   time.Time
 	CompletedAt time.Time // zero if not yet complete
+	BoothID     string    // conversation scope; "" = 1:1
 }
 
 // Store wraps the SQLite database.
@@ -161,8 +164,10 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_peer_at  ON messages(peer, at);
-CREATE INDEX IF NOT EXISTS idx_messages_booth_at ON messages(booth_id, at);
-CREATE INDEX IF NOT EXISTS idx_messages_uuid     ON messages(uuid) WHERE uuid IS NOT NULL;
+-- Indexes on columns that older stores gain via ALTER (booth_id, uuid) are
+-- created after those ALTERs run, in migrate() — not here — so opening a
+-- pre-existing DB whose table predates the column doesn't fail before the
+-- ALTER can add it.
 
 CREATE TABLE IF NOT EXISTS message_reactions (
     message_uuid TEXT NOT NULL,
@@ -218,10 +223,17 @@ CREATE TABLE IF NOT EXISTS flips (
     sha256       TEXT,
     status       TEXT NOT NULL,
     started_at   TEXT NOT NULL,
-    completed_at TEXT
+    completed_at TEXT,
+    booth_id     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_flips_peer_started ON flips(peer, started_at);
+-- idx_flips_booth (on the ALTER-added booth_id column) is created in migrate().
+
+CREATE TABLE IF NOT EXISTS blocked (
+    peer TEXT PRIMARY KEY,
+    at   TEXT NOT NULL
+);
 `
 
 func migrate(db *sql.DB) error {
@@ -239,10 +251,27 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE messages ADD COLUMN deleted_at TEXT`,      // v0.10
 		`ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`, // v0.10
 		`ALTER TABLE peers ADD COLUMN display TEXT`,                         // v0.12 friendly names
+		`ALTER TABLE messages ADD COLUMN card TEXT`,                         // v0.14 link cards
+		`ALTER TABLE flips ADD COLUMN booth_id TEXT`,                        // v0.15 booth-scoped flips
+		`ALTER TABLE peers ADD COLUMN avatar TEXT`,                          // v0.16 custom avatars
 	}
 	for _, stmt := range alters {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return fmt.Errorf("migrate %q: %w", stmt, err)
+		}
+	}
+	// Indexes on columns the ALTERs above add. These MUST run after the ALTERs:
+	// putting them in the base schema breaks opening an older DB whose table
+	// predates the column (CREATE INDEX fails with "no such column" before the
+	// ALTER can add it).
+	postAlterIndexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_messages_booth_at ON messages(booth_id, at)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_uuid ON messages(uuid) WHERE uuid IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_flips_booth ON flips(booth_id)`,
+	}
+	for _, stmt := range postAlterIndexes {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate index %q: %w", stmt, err)
 		}
 	}
 	// Backfill the FTS index from any pre-existing messages that aren't
@@ -282,10 +311,24 @@ func (s *Store) SetPeerDisplay(ctx context.Context, name, display string) error 
 	return err
 }
 
+// SetPeerAvatar records a peer's avatar data URI (no-op if empty, so we never
+// clobber a known avatar with a blank one — same policy as SetPeerDisplay).
+func (s *Store) SetPeerAvatar(ctx context.Context, name, avatar string) error {
+	if avatar == "" {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO peers (name, first_seen, last_seen, avatar) VALUES (?, ?, ?, ?)
+		ON CONFLICT(name) DO UPDATE SET avatar = excluded.avatar, last_seen = excluded.last_seen
+	`, name, now, now, avatar)
+	return err
+}
+
 // Peers returns the known peer roster, most-recently-seen first.
 func (s *Store) Peers(ctx context.Context) ([]PeerRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT name, COALESCE(display, ''), first_seen, last_seen FROM peers ORDER BY last_seen DESC
+		SELECT name, COALESCE(display, ''), COALESCE(avatar, ''), first_seen, last_seen FROM peers ORDER BY last_seen DESC
 	`)
 	if err != nil {
 		return nil, err
@@ -295,7 +338,7 @@ func (s *Store) Peers(ctx context.Context) ([]PeerRecord, error) {
 	for rows.Next() {
 		var p PeerRecord
 		var first, last string
-		if err := rows.Scan(&p.Name, &p.Display, &first, &last); err != nil {
+		if err := rows.Scan(&p.Name, &p.Display, &p.Avatar, &first, &last); err != nil {
 			return nil, err
 		}
 		p.FirstSeen, _ = time.Parse(time.RFC3339Nano, first)
@@ -315,6 +358,21 @@ func (s *Store) PeerDisplays(ctx context.Context) (map[string]string, error) {
 	for _, p := range peers {
 		if p.Display != "" {
 			m[p.Name] = p.Display
+		}
+	}
+	return m, nil
+}
+
+// PeerAvatars returns a name->avatar (data URI) map for rendering peer pictures.
+func (s *Store) PeerAvatars(ctx context.Context) (map[string]string, error) {
+	peers, err := s.Peers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, len(peers))
+	for _, p := range peers {
+		if p.Avatar != "" {
+			m[p.Name] = p.Avatar
 		}
 	}
 	return m, nil
@@ -352,11 +410,29 @@ func (s *Store) AppendMessageFull(ctx context.Context, m Message) error {
 	if m.ParentUUID != "" {
 		parentCol = &m.ParentUUID
 	}
+	var cardCol *string
+	if m.Card != "" {
+		cardCol = &m.Card
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO messages (peer, direction, text, at, booth_id, uuid, parent_uuid)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, m.Peer, m.Direction, m.Text, m.At.UTC().Format(time.RFC3339Nano), boothCol, uuidCol, parentCol)
+		INSERT INTO messages (peer, direction, text, at, booth_id, uuid, parent_uuid, card)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, m.Peer, m.Direction, m.Text, m.At.UTC().Format(time.RFC3339Nano), boothCol, uuidCol, parentCol, cardCol)
 	return err
+}
+
+// SetMessageCard stores (or replaces) the unfurled link-card JSON on a message
+// identified by UUID. Returns whether a row was updated.
+func (s *Store) SetMessageCard(ctx context.Context, uuid, cardJSON string) (bool, error) {
+	if uuid == "" {
+		return false, fmt.Errorf("uuid required")
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE messages SET card = ? WHERE uuid = ?`, cardJSON, uuid)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // ApplyMessageEdit replaces text on the message with the given UUID and
@@ -486,7 +562,7 @@ func (s *Store) SearchMessages(ctx context.Context, query string, limit int) ([]
 		SELECT m.id, COALESCE(m.uuid,''), m.peer, m.direction, m.text, m.at,
 		       COALESCE(m.booth_id,''), COALESCE(m.parent_uuid,''),
 		       COALESCE(m.edited_at,''), COALESCE(m.deleted_at,''), COALESCE(m.pinned, 0),
-		       snippet(messages_fts, 0, '<mark>', '</mark>', '...', 12)
+		       snippet(messages_fts, 0, char(2), char(3), '...', 12)
 		FROM messages_fts
 		JOIN messages m ON m.id = messages_fts.rowid
 		WHERE messages_fts MATCH ? AND m.deleted_at IS NULL
@@ -525,7 +601,7 @@ func (s *Store) FindMessageByUUID(ctx context.Context, uuid string) (Message, er
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, COALESCE(uuid,''), peer, direction, text, at, COALESCE(booth_id,''),
 		       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''),
-		       COALESCE(pinned, 0)
+		       COALESCE(pinned, 0), COALESCE(card,'')
 		FROM messages WHERE uuid = ?
 	`, uuid)
 	return scanFullMessage(row)
@@ -536,7 +612,7 @@ func scanFullMessage(row *sql.Row) (Message, error) {
 	var m Message
 	var atStr, editedStr, deletedStr string
 	var pinnedInt int
-	if err := row.Scan(&m.ID, &m.UUID, &m.Peer, &m.Direction, &m.Text, &atStr, &m.BoothID, &m.ParentUUID, &editedStr, &deletedStr, &pinnedInt); err != nil {
+	if err := row.Scan(&m.ID, &m.UUID, &m.Peer, &m.Direction, &m.Text, &atStr, &m.BoothID, &m.ParentUUID, &editedStr, &deletedStr, &pinnedInt, &m.Card); err != nil {
 		return Message{}, err
 	}
 	m.At, _ = time.Parse(time.RFC3339Nano, atStr)
@@ -566,9 +642,13 @@ func (s *Store) AppendFlip(ctx context.Context, f FlipRecord) error {
 		s := f.CompletedAt.UTC().Format(time.RFC3339Nano)
 		completedAt = &s
 	}
+	var boothCol *string
+	if f.BoothID != "" {
+		boothCol = &f.BoothID
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO flips (id, peer, direction, filename, size, mime, path, sha256, status, started_at, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO flips (id, peer, direction, filename, size, mime, path, sha256, status, started_at, completed_at, booth_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			filename=excluded.filename,
 			size=excluded.size,
@@ -576,10 +656,11 @@ func (s *Store) AppendFlip(ctx context.Context, f FlipRecord) error {
 			path=excluded.path,
 			sha256=excluded.sha256,
 			status=excluded.status,
-			completed_at=excluded.completed_at
+			completed_at=excluded.completed_at,
+			booth_id=COALESCE(excluded.booth_id, flips.booth_id)
 	`,
 		f.ID, f.Peer, f.Direction, f.Filename, f.Size, f.Mime, f.Path, f.Sha256, f.Status,
-		f.StartedAt.UTC().Format(time.RFC3339Nano), completedAt)
+		f.StartedAt.UTC().Format(time.RFC3339Nano), completedAt, boothCol)
 	return err
 }
 
@@ -600,12 +681,28 @@ func (s *Store) UpdateFlipStatus(ctx context.Context, id, status, sha256 string,
 // FlipsByPeer returns flips with the given peer, oldest first.
 func (s *Store) FlipsByPeer(ctx context.Context, peer string) ([]FlipRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, peer, direction, filename, size, mime, path, sha256, status, started_at, completed_at
+		SELECT id, peer, direction, filename, size, mime, path, sha256, status, started_at, completed_at, COALESCE(booth_id, '')
 		FROM flips WHERE peer = ? ORDER BY started_at ASC
 	`, peer)
 	if err != nil {
 		return nil, err
 	}
+	return scanFlips(rows)
+}
+
+// FlipsByBooth returns flips scoped to a booth (its conversation), oldest first.
+func (s *Store) FlipsByBooth(ctx context.Context, boothID string) ([]FlipRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, peer, direction, filename, size, mime, path, sha256, status, started_at, completed_at, COALESCE(booth_id, '')
+		FROM flips WHERE booth_id = ? ORDER BY started_at ASC
+	`, boothID)
+	if err != nil {
+		return nil, err
+	}
+	return scanFlips(rows)
+}
+
+func scanFlips(rows *sql.Rows) ([]FlipRecord, error) {
 	defer rows.Close()
 	var out []FlipRecord
 	for rows.Next() {
@@ -613,7 +710,7 @@ func (s *Store) FlipsByPeer(ctx context.Context, peer string) ([]FlipRecord, err
 		var mime, sha sql.NullString
 		var startedAt string
 		var completedAt sql.NullString
-		if err := rows.Scan(&f.ID, &f.Peer, &f.Direction, &f.Filename, &f.Size, &mime, &f.Path, &sha, &f.Status, &startedAt, &completedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.Peer, &f.Direction, &f.Filename, &f.Size, &mime, &f.Path, &sha, &f.Status, &startedAt, &completedAt, &f.BoothID); err != nil {
 			return nil, err
 		}
 		f.Mime = mime.String
@@ -630,14 +727,14 @@ func (s *Store) FlipsByPeer(ctx context.Context, peer string) ([]FlipRecord, err
 // GetFlip looks up a single flip by id.
 func (s *Store) GetFlip(ctx context.Context, id string) (FlipRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, peer, direction, filename, size, mime, path, sha256, status, started_at, completed_at
+		SELECT id, peer, direction, filename, size, mime, path, sha256, status, started_at, completed_at, COALESCE(booth_id, '')
 		FROM flips WHERE id = ?
 	`, id)
 	var f FlipRecord
 	var mime, sha sql.NullString
 	var startedAt string
 	var completedAt sql.NullString
-	if err := row.Scan(&f.ID, &f.Peer, &f.Direction, &f.Filename, &f.Size, &mime, &f.Path, &sha, &f.Status, &startedAt, &completedAt); err != nil {
+	if err := row.Scan(&f.ID, &f.Peer, &f.Direction, &f.Filename, &f.Size, &mime, &f.Path, &sha, &f.Status, &startedAt, &completedAt, &f.BoothID); err != nil {
 		return FlipRecord{}, err
 	}
 	f.Mime = mime.String
@@ -677,9 +774,9 @@ func (s *Store) Messages(ctx context.Context, peer string, limit int) ([]Message
 	if limit > 0 {
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT id, COALESCE(uuid,''), peer, direction, text, at, COALESCE(booth_id, ''),
-			       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''), COALESCE(pinned, 0)
+			       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''), COALESCE(pinned, 0), COALESCE(card,'')
 			FROM (
-				SELECT id, uuid, peer, direction, text, at, booth_id, parent_uuid, edited_at, deleted_at, pinned
+				SELECT id, uuid, peer, direction, text, at, booth_id, parent_uuid, edited_at, deleted_at, pinned, card
 				FROM messages WHERE peer = ? AND booth_id IS NULL
 				ORDER BY id DESC LIMIT ?
 			) ORDER BY id ASC
@@ -687,7 +784,7 @@ func (s *Store) Messages(ctx context.Context, peer string, limit int) ([]Message
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT id, COALESCE(uuid,''), peer, direction, text, at, COALESCE(booth_id, ''),
-			       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''), COALESCE(pinned, 0)
+			       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''), COALESCE(pinned, 0), COALESCE(card,'')
 			FROM messages
 			WHERE peer = ? AND booth_id IS NULL ORDER BY id ASC
 		`, peer)
@@ -706,9 +803,9 @@ func (s *Store) MessagesByBooth(ctx context.Context, boothID string, limit int) 
 	if limit > 0 {
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT id, COALESCE(uuid,''), peer, direction, text, at, COALESCE(booth_id, ''),
-			       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''), COALESCE(pinned, 0)
+			       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''), COALESCE(pinned, 0), COALESCE(card,'')
 			FROM (
-				SELECT id, uuid, peer, direction, text, at, booth_id, parent_uuid, edited_at, deleted_at, pinned
+				SELECT id, uuid, peer, direction, text, at, booth_id, parent_uuid, edited_at, deleted_at, pinned, card
 				FROM messages WHERE booth_id = ?
 				ORDER BY id DESC LIMIT ?
 			) ORDER BY id ASC
@@ -716,7 +813,7 @@ func (s *Store) MessagesByBooth(ctx context.Context, boothID string, limit int) 
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT id, COALESCE(uuid,''), peer, direction, text, at, COALESCE(booth_id, ''),
-			       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''), COALESCE(pinned, 0)
+			       COALESCE(parent_uuid,''), COALESCE(edited_at,''), COALESCE(deleted_at,''), COALESCE(pinned, 0), COALESCE(card,'')
 			FROM messages
 			WHERE booth_id = ? ORDER BY id ASC
 		`, boothID)
@@ -734,7 +831,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 		var m Message
 		var atStr, editedStr, deletedStr string
 		var pinnedInt int
-		if err := rows.Scan(&m.ID, &m.UUID, &m.Peer, &m.Direction, &m.Text, &atStr, &m.BoothID, &m.ParentUUID, &editedStr, &deletedStr, &pinnedInt); err != nil {
+		if err := rows.Scan(&m.ID, &m.UUID, &m.Peer, &m.Direction, &m.Text, &atStr, &m.BoothID, &m.ParentUUID, &editedStr, &deletedStr, &pinnedInt, &m.Card); err != nil {
 			return nil, err
 		}
 		m.At, _ = time.Parse(time.RFC3339Nano, atStr)
@@ -879,4 +976,91 @@ func (s *Store) BoothMembers(ctx context.Context, boothID string) ([]BoothMember
 		out = append(out, bm)
 	}
 	return out, rows.Err()
+}
+
+// BoothLastActivity returns the most recent message time in each booth, keyed
+// by booth id. Booths with no messages are absent from the map. Used to sort /
+// auto-hide inactive rooms in the UI.
+func (s *Store) BoothLastActivity(ctx context.Context) (map[string]time.Time, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT booth_id, MAX(at) FROM messages
+		WHERE booth_id IS NOT NULL AND booth_id != ''
+		GROUP BY booth_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var id, atStr string
+		if err := rows.Scan(&id, &atStr); err != nil {
+			return nil, err
+		}
+		if t, perr := time.Parse(time.RFC3339Nano, atStr); perr == nil {
+			out[id] = t
+		}
+	}
+	return out, rows.Err()
+}
+
+// BlockPeer adds a peer id to the local blocklist (idempotent).
+func (s *Store) BlockPeer(ctx context.Context, peer string) error {
+	if strings.TrimSpace(peer) == "" {
+		return fmt.Errorf("peer required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO blocked (peer, at) VALUES (?, ?)
+		ON CONFLICT(peer) DO NOTHING
+	`, peer, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+// UnblockPeer removes a peer id from the blocklist.
+func (s *Store) UnblockPeer(ctx context.Context, peer string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM blocked WHERE peer = ?`, peer)
+	return err
+}
+
+// BlockedPeers returns every blocked peer id.
+func (s *Store) BlockedPeers(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT peer FROM blocked ORDER BY at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// DeleteBooth removes a booth row and its membership list (history rows in
+// messages/flips keyed by this id are left intact — they reappear if the user
+// rejoins via the invite link; call DeleteMessagesByBooth to purge them).
+func (s *Store) DeleteBooth(ctx context.Context, id string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM booth_members WHERE booth_id = ?`, id); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM booths WHERE id = ?`, id)
+	return err
+}
+
+// DeleteMessagesByBooth purges all messages in a booth from this device (the
+// AFTER DELETE trigger keeps the FTS index in sync).
+func (s *Store) DeleteMessagesByBooth(ctx context.Context, boothID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE booth_id = ?`, boothID)
+	return err
+}
+
+// DeleteFlipsByPeer removes all flip rows keyed by a given peer/room id (used to
+// purge a room's parked files, which are keyed by the room id).
+func (s *Store) DeleteFlipsByPeer(ctx context.Context, peer string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM flips WHERE peer = ?`, peer)
+	return err
 }

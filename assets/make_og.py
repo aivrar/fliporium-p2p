@@ -7,7 +7,7 @@ W, H = 1200, 630
 BG = (19, 19, 24)               # #131318
 INK = (241, 241, 255)
 INK_MUTED = (154, 160, 173)
-PURPLE = (201, 167, 255)
+PURPLE = (92, 178, 242)         # circus blue (#5cb2f2)
 CREAM = (255, 245, 209)
 
 ASSETS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20,7 +20,7 @@ gd = ImageDraw.Draw(glow)
 # Radial-ish glow approximated with overlapping low-alpha ellipses.
 for radius, alpha in [(420, 16), (320, 24), (220, 32), (140, 44)]:
     bbox = (220 - radius, 315 - radius, 220 + radius, 315 + radius)
-    gd.ellipse(bbox, fill=(201, 167, 255, alpha))
+    gd.ellipse(bbox, fill=(92, 178, 242, alpha))
 img = Image.alpha_composite(img.convert("RGBA"), glow).convert("RGB")
 
 d = ImageDraw.Draw(img)
@@ -56,7 +56,7 @@ d.text((title_x, 200), "Fliporium", font=title_font, fill=INK)
 
 # Tagline.
 d.text((title_x, 360), "Friends, files, and side-by-side things,", font=tagline_font, fill=PURPLE)
-d.text((title_x, 405), "over a private little tailnet.", font=tagline_font, fill=CREAM)
+d.text((title_x, 405), "in a private little room of your own.", font=tagline_font, fill=CREAM)
 
 # Bottom URL strip.
 d.text((title_x, H - 70), "fliporium.com", font=url_font, fill=INK_MUTED)

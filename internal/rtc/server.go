@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,7 @@ const (
 	// only and never decrypts.
 	maxBacklogPerRoom = 200
 	maxBlobBytes      = 64 * 1024
+	maxSignalIDBytes  = 128
 	backlogTTL        = 14 * 24 * time.Hour
 )
 
@@ -142,6 +144,18 @@ func (c *serverClient) send(m Sig) {
 	_ = wsjson.Write(ctx, c.conn, m)
 }
 
+func validSignalID(id string) bool {
+	if id == "" || len(id) > maxSignalIDBytes || strings.TrimSpace(id) != id {
+		return false
+	}
+	for _, r := range id {
+		if r < 0x21 || r > 0x7e || strings.ContainsRune(`/\?#%`, r) {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) join(room string, c *serverClient) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -159,6 +173,9 @@ func (s *Server) join(room string, c *serverClient) ([]string, error) {
 		}
 		return nil, fmt.Errorf("room is full (max %d people)", maxRoomSize)
 	}
+	if _, exists := m[c.id]; exists {
+		return nil, fmt.Errorf("peer id %q is already joined", c.id)
+	}
 	others := make([]string, 0, len(m))
 	for id := range m {
 		others = append(others, id)
@@ -168,12 +185,12 @@ func (s *Server) join(room string, c *serverClient) ([]string, error) {
 	return others, nil
 }
 
-func (s *Server) leave(room, id string) {
+func (s *Server) leave(room string, c *serverClient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if m := s.rooms[room]; m != nil {
-		if _, ok := m[id]; ok {
-			delete(m, id)
+		if cur, ok := m[c.id]; ok && cur == c {
+			delete(m, c.id)
 			s.total--
 		}
 		if len(m) == 0 {
@@ -245,7 +262,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
 	}
@@ -256,8 +273,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	if err := wsjson.Read(r.Context(), conn, &first); err != nil {
 		return
 	}
-	if first.Type != SigJoin || first.Room == "" || first.From == "" {
-		_ = wsjson.Write(r.Context(), conn, Sig{Type: SigError, Msg: "first message must be join with room+from"})
+	if first.Type != SigJoin || !validSignalID(first.Room) || !validSignalID(first.From) {
+		_ = wsjson.Write(r.Context(), conn, Sig{Type: SigError, Msg: "first message must be join with valid room+from"})
 		return
 	}
 
@@ -279,7 +296,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.broadcast(room, c.id, Sig{Type: SigPeerJoined, Room: room, From: c.id})
 
 	defer func() {
-		s.leave(room, c.id)
+		s.leave(room, c)
 		s.broadcast(room, c.id, Sig{Type: SigPeerLeft, Room: room, From: c.id})
 		s.logf("leave: peer=%s room=%s", c.id, room)
 	}()
@@ -292,6 +309,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		m.From = c.id // trust the connection's id, not the client's claim
 		switch m.Type {
 		case SigOffer, SigAnswer, SigICE:
+			if !validSignalID(m.To) {
+				continue
+			}
 			s.logf("relay: %s %s->%s room=%s", m.Type, c.id, m.To, room)
 			s.relayTo(room, m.To, m)
 		case SigStore:

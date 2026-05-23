@@ -9,13 +9,25 @@
 </head>
 <body>
 <header id="topbar">
-    <div class="brand">Fliporium</div>
-    <div id="self">
-        <span id="selfDot" class="dot offline"></span>
-        <span id="selfName">…</span>
-        <span id="selfIp"></span>
-        <button id="searchBtn" class="topbar-btn" title="Search messages (Ctrl+K)">search</button>
-        <button id="backstageBtn" class="topbar-btn" title="Backstage — settings, twin, themes">Backstage</button>
+    <div class="brand">
+        <img class="brand-mark" src="/logo.svg" alt="" width="26" height="26">
+        <span>Fliporium</span>
+    </div>
+    <div class="topbar-right">
+        <div id="self">
+            <span id="selfDot" class="dot offline"></span>
+            <span id="selfAvatar" class="avatar"></span>
+            <span id="selfName">…</span>
+            <span id="selfIp"></span>
+            <button id="helpBtn" class="topbar-btn" title="Help — how Fliporium works">Help</button>
+            <button id="searchBtn" class="topbar-btn" title="Search your messages (Ctrl+K)">search</button>
+            <button id="backstageBtn" class="topbar-btn" title="Backstage — your picture, theme, sounds & settings">Backstage</button>
+        </div>
+        <div id="winctl">
+            <button id="win-min" class="winbtn" title="Minimize" aria-label="Minimize">&#x2212;</button>
+            <button id="win-max" class="winbtn" title="Maximize / restore" aria-label="Maximize">&#x25A2;</button>
+            <button id="win-close" class="winbtn winbtn-close" title="Close" aria-label="Close">&#x2715;</button>
+        </div>
     </div>
 </header>
 <div id="search-overlay" class="hidden">
@@ -27,20 +39,22 @@
     <aside id="floor">
         <div class="panel-title">The Floor</div>
 
-        <div class="floor-section-title">In this room</div>
-        <ul id="peers" class="peers"></ul>
-        <div id="floor-empty" class="empty hidden">no one else here yet</div>
+        <input id="floorFilter" class="floor-filter" placeholder="filter rooms &amp; people…" title="Type to filter your rooms and people by name" autocomplete="off">
 
         <div class="floor-section-title">
             <span>Rooms</span>
-            <button id="createBoothBtn" class="link-btn" title="create a room">+</button>
+            <button id="createBoothBtn" class="link-btn" title="Create a new room">+</button>
         </div>
         <ul id="booths" class="peers"></ul>
         <div id="booths-empty" class="empty">no rooms yet — create one or join via a link</div>
 
+        <div class="floor-section-title">People</div>
+        <ul id="peers" class="peers"></ul>
+        <div id="floor-empty" class="empty hidden">no one connected yet</div>
+
         <div class="floor-add">
-            <input id="connectInput" placeholder="paste an invite link to join..." autocomplete="off">
-            <button id="connectBtn" title="join this room">join</button>
+            <input id="connectInput" placeholder="paste an invite link to join..." title="Paste a room's invite link here, then click join" autocomplete="off">
+            <button id="connectBtn" title="Join the room from the pasted link">join</button>
         </div>
     </aside>
 
@@ -51,16 +65,30 @@
             <button id="copyInviteBtn" class="topbar-btn hidden" title="copy this room's invite link">copy invite link</button>
         </div>
         <div id="pinned-banner" class="pinned-banner hidden"></div>
-        <div id="showtime-panel" class="hidden"></div>
+        <div id="welcome" class="welcome hidden">
+            <div class="welcome-icon">🎪</div>
+            <h2>Welcome to Fliporium</h2>
+            <p class="welcome-lead">A private little place for you and the people you care about. Pick how you'd like to start:</p>
+            <div class="welcome-actions">
+                <button id="welcome-create">Create a room</button>
+                <button id="welcome-paste" class="ghost">I have an invite link</button>
+            </div>
+            <ul class="welcome-tips">
+                <li><strong>Rooms</strong> are private spaces — make one, then share its invite link so friends can join (up to 16).</li>
+                <li><strong>People</strong> on the left turn green when they're online. Click one to chat one-to-one.</li>
+                <li><strong>Flip</strong> a file by dragging it onto a chat — it lands right on their device, no size limit.</li>
+                <li>Stuck? Hit <strong>Help</strong> at the top right anytime.</li>
+            </ul>
+        </div>
         <ol id="messages" class="messages"></ol>
         <div id="reply-banner" class="reply-banner">
             <span class="text">replying to: <span id="reply-banner-text"></span></span>
             <button id="reply-cancel" title="cancel reply">×</button>
         </div>
         <form id="composer">
-            <button id="attachBtn" type="button" title="flip a file" disabled>flip</button>
-            <input id="composerInput" autocomplete="off" placeholder="type a message - **markdown** works..." disabled>
-            <button id="sendBtn" type="submit" disabled>send</button>
+            <button id="attachBtn" type="button" title="Send a file (a 'flip') — or just drag one onto the chat" disabled>flip</button>
+            <textarea id="composerInput" rows="1" autocomplete="off" placeholder="message… (Enter to send · Shift+Enter for a new line · **markdown** works)" disabled></textarea>
+            <button id="sendBtn" type="submit" title="Send (Enter)" disabled>send</button>
         </form>
     </section>
 </main>
@@ -70,6 +98,17 @@
 </div>
 
 <div id="confetti-layer" aria-hidden="true"></div>
+
+<div id="name-overlay" class="hidden">
+    <div class="onboard-card">
+        <div class="onboard-icon">🎪</div>
+        <h2>Pick a name</h2>
+        <p>What should people see when you chat? It's just a label — you can change it anytime in Backstage.</p>
+        <input id="name-input" maxlength="40" placeholder="e.g. mooncat" autocomplete="off">
+        <div id="name-error" class="onboard-error hidden"></div>
+        <button id="name-go">Let’s go</button>
+    </div>
+</div>
 
 <div id="tour-overlay" class="hidden">
     <div class="tour-card">
@@ -89,6 +128,39 @@
     </div>
 </div>
 
+<div id="help-overlay" class="hidden">
+    <div class="help-card">
+        <div class="help-head">
+            <h2>How Fliporium works</h2>
+            <button id="help-close" class="ghost" title="close">×</button>
+        </div>
+        <div class="help-body">
+            <h3>The basics</h3>
+            <ul>
+                <li><strong>The Floor</strong> (left) is your home — your <strong>Rooms</strong> at the top, <strong>People</strong> below.</li>
+                <li>A <strong>Room</strong> is a private group space. Make one with the <strong>+</strong>, then send its <strong>invite link</strong> so others can join (up to 16 people).</li>
+                <li><strong>People</strong> turn green when they're online — click to chat one-to-one. <em>Right-click</em> someone to message privately or block them.</li>
+            </ul>
+            <h3>Sharing things</h3>
+            <ul>
+                <li><strong>Flip</strong> = send a file: drag it onto a chat, or use the <em>flip</em> button. There's no size limit.</li>
+                <li><strong>Catch</strong> = the files you receive — images, video, audio, PDFs and text preview right inline.</li>
+            </ul>
+            <h3>Good to know</h3>
+            <ul>
+                <li>No account, no signup. Everything is end-to-end encrypted, straight between devices.</li>
+                <li><kbd>Ctrl</kbd>+<kbd>K</kbd> searches all your messages. <kbd>Esc</kbd> closes any popup.</li>
+                <li>Use the <strong>filter</strong> box on The Floor to find a room or person fast.</li>
+                <li><strong>Backstage</strong> holds your picture, theme, sounds, and a way to wipe everything.</li>
+            </ul>
+        </div>
+        <div class="help-foot">
+            <button id="help-tour" class="ghost">Replay the welcome tour</button>
+            <a id="help-docs" href="https://fliporium.com/docs" rel="noopener noreferrer">Full docs ↗</a>
+        </div>
+    </div>
+</div>
+
 <aside id="backstage" class="hidden">
     <div class="bs-header">
         <span>Backstage</span>
@@ -97,6 +169,12 @@
     <section class="bs-section">
         <h3>You</h3>
         <div id="bs-self" class="bs-row"></div>
+        <div class="bs-row bs-avatar-row">
+            <span id="bs-avatar" class="avatar avatar-lg"></span>
+            <button id="bs-avatar-pick">Change picture</button>
+            <button id="bs-avatar-clear" class="ghost">Remove</button>
+        </div>
+        <p class="bs-hint">Friends see your picture next to your name. PNG, JPG, or GIF.</p>
     </section>
     <section class="bs-section">
         <h3>Theme</h3>
@@ -122,8 +200,15 @@
         <p class="bs-hint">Open a room on The Floor (or create one with the <strong>+</strong> next to Rooms), then hit <strong>“copy invite link”</strong> at the top of the room and send it to whoever you want. They paste it into the “join” box and they're in.</p>
     </section>
     <section class="bs-section">
+        <h3>Blocked</h3>
+        <p class="bs-hint">Blocked people can't connect to you in any room, and you won't see their messages. Unblock anytime.</p>
+        <div id="bs-blocked" class="bs-blocked"></div>
+    </section>
+    <section class="bs-section">
         <h3>Help</h3>
-        <button id="bs-replay-tour" class="ghost">replay first-launch tour</button>
+        <div class="bs-row">
+            <button id="bs-replay-tour" class="ghost">replay first-launch tour</button>
+        </div>
     </section>
     <section class="bs-section danger">
         <h3>Danger zone</h3>

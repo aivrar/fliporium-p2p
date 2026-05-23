@@ -27,6 +27,16 @@ import (
 	"sync"
 )
 
+const (
+	// MaxFlipBytes is a hard ceiling on a single received file. Generous for
+	// video, but bounds a malicious peer that declares a tiny size then streams
+	// forever to fill the victim's disk.
+	MaxFlipBytes = int64(4) << 30 // 4 GiB
+	// MaxConcurrentInFlips caps simultaneous inbound transfers so a peer can't
+	// open thousands of files/handles at once.
+	MaxConcurrentInFlips = 24
+)
+
 type incomingFlip struct {
 	id      string
 	peer    string
@@ -45,22 +55,26 @@ type outgoingFlip struct {
 	mime     string
 	size     int64
 	path     string
+	boothID  string
 	cancel   chan struct{}
 }
 
-// SendFlip begins streaming localPath to peerName. Returns the generated
-// flip id once FLIP_START has been sent.
+// SendFlip begins streaming localPath to peerName as a 1:1 (no booth scope).
+// Returns the generated flip id once FLIP_START has been sent.
 func (h *Hub) SendFlip(peerName, localPath string) (string, error) {
 	id, err := newFlipID()
 	if err != nil {
 		return "", err
 	}
-	return id, h.SendFlipWithID(peerName, localPath, id)
+	return id, h.SendFlipWithID(peerName, localPath, id, "")
 }
 
-// SendFlipWithID is like SendFlip but uses a caller-supplied id. Useful for
-// booth-flips where the same logical file goes to many peers with a shared id.
-func (h *Hub) SendFlipWithID(peerName, localPath, id string) error {
+// SendFlipWithID is like SendFlip but uses a caller-supplied id and a booth
+// scope. Booth-flips share one id across recipients and carry the booth id so
+// receivers file the result under the right conversation (passing "" sends it
+// as a 1:1). The booth id keeps a file from surfacing in other rooms that
+// happen to share a member.
+func (h *Hub) SendFlipWithID(peerName, localPath, id, boothID string) error {
 	c := h.Get(peerName)
 	if c == nil {
 		return fmt.Errorf("no active connection to %q", peerName)
@@ -96,7 +110,7 @@ func (h *Hub) SendFlipWithID(peerName, localPath, id string) error {
 		}
 	}
 
-	start := FlipStart{ID: id, Filename: base, Size: info.Size(), Mime: mimeType}
+	start := FlipStart{ID: id, Filename: base, Size: info.Size(), Mime: mimeType, BoothID: boothID}
 	if err := c.WriteFrame(TypeFlipStart, start); err != nil {
 		f.Close()
 		return fmt.Errorf("send FLIP_START: %w", err)
@@ -109,6 +123,7 @@ func (h *Hub) SendFlipWithID(peerName, localPath, id string) error {
 		mime:     mimeType,
 		size:     info.Size(),
 		path:     localPath,
+		boothID:  boothID,
 		cancel:   make(chan struct{}),
 	}
 	h.flipMu.Lock()
@@ -126,6 +141,7 @@ func (h *Hub) SendFlipWithID(peerName, localPath, id string) error {
 			Size:      info.Size(),
 			Mime:      mimeType,
 			Path:      localPath,
+			BoothID:   boothID,
 		},
 	})
 
@@ -148,7 +164,7 @@ func (h *Hub) runOutgoingFlip(c *PeerConn, f *os.File, out *outgoingFlip, start 
 		select {
 		case <-out.cancel:
 			h.emit(HubEvent{Kind: EventFlipFailed, Peer: c.Name, Text: "cancelled",
-				Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Mime: out.mime, Size: out.size, Path: out.path, Bytes: offset, Reason: "cancelled"}})
+				Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Mime: out.mime, Size: out.size, Path: out.path, BoothID: out.boothID, Bytes: offset, Reason: "cancelled"}})
 			return
 		default:
 		}
@@ -162,7 +178,7 @@ func (h *Hub) runOutgoingFlip(c *PeerConn, f *os.File, out *outgoingFlip, start 
 			hasher.Write(buf[:n])
 			offset += int64(n)
 			h.emit(HubEvent{Kind: EventFlipProgress, Peer: c.Name, Text: out.filename,
-				Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Mime: out.mime, Size: out.size, Path: out.path, Bytes: offset}})
+				Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Mime: out.mime, Size: out.size, Path: out.path, BoothID: out.boothID, Bytes: offset}})
 		}
 		if err == io.EOF {
 			break
@@ -179,17 +195,28 @@ func (h *Hub) runOutgoingFlip(c *PeerConn, f *os.File, out *outgoingFlip, start 
 		return
 	}
 	h.emit(HubEvent{Kind: EventFlipCompleted, Peer: c.Name, Text: out.filename,
-		Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Mime: out.mime, Size: out.size, Path: out.path, Bytes: offset, Sha256: sum}})
+		Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Mime: out.mime, Size: out.size, Path: out.path, BoothID: out.boothID, Bytes: offset, Sha256: sum}})
 }
 
 func (h *Hub) emitFlipFailed(peerName string, out *outgoingFlip, sent int64, reason string) {
 	h.emit(HubEvent{Kind: EventFlipFailed, Peer: peerName, Text: reason,
-		Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Size: out.size, Path: out.path, Bytes: sent, Reason: reason}})
+		Data: &FlipEventData{ID: out.id, Direction: "out", Filename: out.filename, Size: out.size, Path: out.path, BoothID: out.boothID, Bytes: sent, Reason: reason}})
 }
 
 func (h *Hub) handleFlipStart(peerName string, start FlipStart) {
 	if h.CatchRoot == "" {
 		h.sendReject(peerName, start.ID, "catch directory not configured")
+		return
+	}
+	if start.Size < 0 || start.Size > MaxFlipBytes {
+		h.sendReject(peerName, start.ID, "file too large")
+		return
+	}
+	h.flipMu.Lock()
+	tooMany := len(h.inFlips) >= MaxConcurrentInFlips
+	h.flipMu.Unlock()
+	if tooMany {
+		h.sendReject(peerName, start.ID, "too many concurrent transfers")
 		return
 	}
 	base := safeBasename(start.Filename)
@@ -230,6 +257,7 @@ func (h *Hub) handleFlipStart(peerName string, start FlipStart) {
 			Size:      start.Size,
 			Mime:      start.Mime,
 			Path:      dest,
+			BoothID:   start.BoothID,
 		},
 	})
 }
@@ -243,9 +271,22 @@ func (h *Hub) handleFlipChunk(peerName string, chunk FlipChunk) {
 	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
+	// Reject a sender that streams more than the size it declared (or past the
+	// hard cap): otherwise a malicious peer could declare a tiny file and fill
+	// the victim's disk.
+	if in.written+int64(len(chunk.Data)) > in.info.Size || in.written+int64(len(chunk.Data)) > MaxFlipBytes {
+		in.file.Close()
+		os.Remove(in.path)
+		h.flipMu.Lock()
+		delete(h.inFlips, chunk.ID)
+		h.flipMu.Unlock()
+		h.emit(HubEvent{Kind: EventFlipFailed, Peer: peerName, Text: "oversized transfer",
+			Data: &FlipEventData{ID: in.id, Direction: "in", Filename: in.info.Filename, Size: in.info.Size, Path: in.path, BoothID: in.info.BoothID, Bytes: in.written, Reason: "sender exceeded declared size"}})
+		return
+	}
 	if _, err := in.file.Write(chunk.Data); err != nil {
 		h.emit(HubEvent{Kind: EventFlipFailed, Peer: peerName, Text: "write: " + err.Error(),
-			Data: &FlipEventData{ID: in.id, Direction: "in", Filename: in.info.Filename, Size: in.info.Size, Path: in.path, Bytes: in.written, Reason: err.Error()}})
+			Data: &FlipEventData{ID: in.id, Direction: "in", Filename: in.info.Filename, Size: in.info.Size, Path: in.path, BoothID: in.info.BoothID, Bytes: in.written, Reason: err.Error()}})
 		in.file.Close()
 		h.flipMu.Lock()
 		delete(h.inFlips, chunk.ID)
@@ -255,7 +296,7 @@ func (h *Hub) handleFlipChunk(peerName string, chunk FlipChunk) {
 	in.hasher.Write(chunk.Data)
 	in.written += int64(len(chunk.Data))
 	h.emit(HubEvent{Kind: EventFlipProgress, Peer: peerName, Text: in.info.Filename,
-		Data: &FlipEventData{ID: in.id, Direction: "in", Filename: in.info.Filename, Size: in.info.Size, Path: in.path, Bytes: in.written, Mime: in.info.Mime}})
+		Data: &FlipEventData{ID: in.id, Direction: "in", Filename: in.info.Filename, Size: in.info.Size, Path: in.path, Bytes: in.written, Mime: in.info.Mime, BoothID: in.info.BoothID}})
 }
 
 func (h *Hub) handleFlipEnd(peerName string, end FlipEnd) {
@@ -271,11 +312,11 @@ func (h *Hub) handleFlipEnd(peerName string, end FlipEnd) {
 	if got != end.Sha256 {
 		os.Remove(in.path)
 		h.emit(HubEvent{Kind: EventFlipFailed, Peer: peerName, Text: "sha256 mismatch",
-			Data: &FlipEventData{ID: in.id, Direction: "in", Filename: in.info.Filename, Size: in.info.Size, Path: in.path, Bytes: in.written, Reason: "sha256 mismatch"}})
+			Data: &FlipEventData{ID: in.id, Direction: "in", Filename: in.info.Filename, Size: in.info.Size, Path: in.path, BoothID: in.info.BoothID, Bytes: in.written, Reason: "sha256 mismatch"}})
 		return
 	}
 	h.emit(HubEvent{Kind: EventFlipCompleted, Peer: peerName, Text: in.info.Filename,
-		Data: &FlipEventData{ID: in.id, Direction: "in", Filename: in.info.Filename, Size: in.info.Size, Mime: in.info.Mime, Path: in.path, Bytes: in.written, Sha256: got}})
+		Data: &FlipEventData{ID: in.id, Direction: "in", Filename: in.info.Filename, Size: in.info.Size, Mime: in.info.Mime, Path: in.path, BoothID: in.info.BoothID, Bytes: in.written, Sha256: got}})
 }
 
 func (h *Hub) handleFlipReject(peerName string, r FlipReject) {
@@ -317,12 +358,57 @@ func safeBasename(name string) string {
 	if name == "" || name == "." || name == ".." {
 		return ""
 	}
-	// Disallow path separators that filepath.Base might have left through on
-	// cross-platform names.
-	for _, c := range []string{"\\", "/"} {
+	// Replace path separators AND the rest of the Windows-reserved set. ':' is
+	// the important one: a name like "report.pdf:evil.exe" would otherwise create
+	// a hidden NTFS alternate data stream instead of a visible file.
+	for _, c := range []string{"\\", "/", ":", "*", "?", "\"", "<", ">", "|"} {
 		name = strings.ReplaceAll(name, c, "_")
 	}
+	// Neutralize control characters (incl. NUL) that could confuse the OS or the
+	// UI that later renders the name.
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 {
+			return '_'
+		}
+		return r
+	}, name)
+	// Windows silently strips trailing dots/spaces, so "evil.exe . " resolves to
+	// "evil.exe": trim them ourselves so the on-disk name matches what the user
+	// sees and can't smuggle a hidden trailing extension.
+	name = strings.TrimRight(name, " .")
+	// Reserved DOS device names (CON, NUL, COM1…) are special at any path depth.
+	if isReservedDeviceName(name) {
+		name = "_" + name
+	}
+	if name == "" {
+		return ""
+	}
+	// Bound the length so a pathological name can't blow past OS path limits.
+	if len(name) > 200 {
+		ext := filepath.Ext(name)
+		if len(ext) > 16 {
+			ext = ""
+		}
+		name = name[:200-len(ext)] + ext
+	}
 	return name
+}
+
+// isReservedDeviceName reports whether name (ignoring any extension) is a
+// Windows reserved device name, which the OS treats as a device regardless of
+// the directory it's in.
+func isReservedDeviceName(name string) bool {
+	stem := name
+	if i := strings.IndexByte(stem, '.'); i >= 0 {
+		stem = stem[:i]
+	}
+	switch strings.ToUpper(stem) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	}
+	return false
 }
 
 func sanitizeForPath(name string) string {

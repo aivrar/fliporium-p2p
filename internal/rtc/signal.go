@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -72,8 +73,14 @@ type SignalClient struct {
 
 // DialSignal connects to the signaling server, joins `room` as `self`, and
 // starts a read pump that feeds the In channel until the connection drops.
+// The dial + join handshake is bounded by a timeout so an unreachable or slow
+// server can't wedge the caller (callers serialize joins, so a hung dial would
+// otherwise stall every room). The established connection then lives for as
+// long as ctx (the read pump is independent of the dial deadline).
 func DialSignal(ctx context.Context, url, room, self string) (*SignalClient, error) {
-	conn, _, err := websocket.Dial(ctx, url, nil)
+	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(dialCtx, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("dial signaling %q: %w", url, err)
 	}
@@ -81,7 +88,7 @@ func DialSignal(ctx context.Context, url, room, self string) (*SignalClient, err
 	conn.SetReadLimit(1 << 20)
 
 	c := &SignalClient{conn: conn, self: self, In: make(chan Sig, 32)}
-	if err := c.Send(ctx, Sig{Type: SigJoin, Room: room, From: self}); err != nil {
+	if err := c.Send(dialCtx, Sig{Type: SigJoin, Room: room, From: self}); err != nil {
 		conn.Close(websocket.StatusInternalError, "join failed")
 		return nil, err
 	}
