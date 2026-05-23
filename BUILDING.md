@@ -89,12 +89,9 @@ $env:FLIPORIUM_SIGNAL = "wss://your-host/ws"
 .\fliporium.exe
 ```
 
-Build the server with `.\build.ps1 -Signal` (produces `flipsignal.exe`). The
-[`deploy/`](deploy/) folder has a Caddyfile, systemd units, and an install script
-— copy [`.vps.example`](.vps.example) to `.vps`, fill in your host, and run
-`deploy/deploy.sh`. A coturn TURN relay is optional, for peers behind hard NATs.
-Your messages stay end-to-end encrypted no matter whose server brokers the
-handshake.
+For the full walkthrough — building `flipsignal`, a systemd unit, TLS with Caddy,
+and optional TURN — see the
+[Self-Hosting guide](https://github.com/aivrar/fliporium-p2p/wiki/Self-Hosting).
 
 ## Tests
 

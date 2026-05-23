@@ -180,14 +180,17 @@ the SQLite store, and the link-unfurl guards.
 Fliporium has no lock-in — anyone can run the coordination piece. Stand up
 `flipsignal` (a single Go binary) on any host, optionally add a coturn relay for
 hard NATs, and point clients at it with `FLIPORIUM_SIGNAL=wss://your-host/ws`.
-The [`deploy/`](deploy/README.md) folder has a Caddyfile, systemd units, and an
-install script: copy [`.vps.example`](.vps.example) to `.vps`, fill in your
-server, and run `./deploy/deploy.sh`. Your messages stay end-to-end encrypted no
-matter whose server brokers the handshake.
+Your messages stay end-to-end encrypted no matter whose server brokers the
+handshake.
 
-The reference deployment (signaling server, the `flipstats` download/stats/contact
-service, coturn, and Caddy) runs the official build at
-[fliporium.com](https://fliporium.com).
+**Step-by-step:** the
+[Self-Hosting guide](https://github.com/aivrar/fliporium-p2p/wiki/Self-Hosting) on
+the wiki goes from a bare Linux VPS to `wss://your-domain/ws` — building
+`flipsignal`, a systemd unit, Caddy for automatic HTTPS, and optional TURN.
+
+The repo's [`deploy/`](deploy/README.md) folder is the reference deployment for
+the *full* fliporium.com site (site + the `flipstats` download/stats/contact
+service + coturn + Caddy) — more than a private signaling server needs.
 
 ## Contributing
 
