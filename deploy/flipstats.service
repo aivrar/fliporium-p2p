@@ -1,5 +1,5 @@
 [Unit]
-Description=Fliporium public stats + downloads + contact server
+Description=Fliporium downloads + contact server
 Documentation=https://fliporium.com
 After=network-online.target
 Wants=network-online.target
@@ -7,7 +7,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 # Serves the .exe download (with an honest completed-download counter), the
-# contact form, and /api/stats (live room/peer counts pulled from flipsignal).
+# contact form, and /api/stats (the public download count).
 User=root
 # SMTP relay credentials (Gmail app password etc.) live in this root-only
 # file, kept out of the unit so they don't show in `systemctl cat`. The
@@ -17,8 +17,7 @@ EnvironmentFile=-/etc/flipstats/smtp.env
 ExecStart=/usr/local/bin/flipstats \
   -listen 127.0.0.1:8088 \
   -data /var/lib/flipstats \
-  -exe /var/www/fliporium/dl/fliporium.exe \
-  -signal-stats http://127.0.0.1:8090/stats
+  -exe /var/www/fliporium/dl/fliporium.exe
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

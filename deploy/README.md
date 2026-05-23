@@ -1,7 +1,7 @@
 # Fliporium deployment
 
 This directory holds everything needed to deploy `fliporium.com` (the website
-+ stats backend) to the VPS that already hosts `headscale.fliporium.com`.
++ download/contact backend) to the VPS that already hosts `headscale.fliporium.com`.
 
 ## What it deploys
 
@@ -20,7 +20,7 @@ This directory holds everything needed to deploy `fliporium.com` (the website
 └── dl/
     └── fliporium.exe
 
-/usr/local/bin/flipstats         # stats server binary
+/usr/local/bin/flipstats         # downloads + contact server binary
 /var/lib/flipstats/downloads.count  # persistent download counter
 /etc/systemd/system/flipstats.service
 /etc/caddy/Caddyfile

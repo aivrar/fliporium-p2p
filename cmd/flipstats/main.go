@@ -3,15 +3,13 @@
 //
 // It deliberately keeps zero per-visit state. The download counter is a single
 // monotonic integer on disk; we never record IPs, never set cookies, never
-// fingerprint. The live room/peer counts come from the signaling server's
-// /stats endpoint, polled every 30 seconds.
+// fingerprint.
 //
 // Flags:
 //
 //	-listen          HTTP listen address (default :8088)
 //	-data            Directory for the counter file (default /var/lib/flipstats)
 //	-exe             Path to the .exe to serve at /dl/fliporium.exe
-//	-signal-stats    flipsignal /stats URL for live room/peer counts
 //	-trusted-proxy   IP allowed to set X-Forwarded-For (usually Caddy on localhost)
 //
 // Behind the scenes Caddy reverse-proxies /api/stats, /api/contact, and /dl/
@@ -46,7 +44,6 @@ var (
 	listenAddr   = flag.String("listen", ":8088", "HTTP listen address")
 	dataDir      = flag.String("data", "/var/lib/flipstats", "Directory for the persistent counter")
 	exePath      = flag.String("exe", "/var/www/fliporium/dl/fliporium.exe", "Path to the .exe to serve")
-	signalStats  = flag.String("signal-stats", "http://127.0.0.1:8090/stats", "flipsignal /stats URL for live room/peer counts")
 	trustedProxy = flag.String("trusted-proxy", "127.0.0.1", "IP allowed to set X-Forwarded-For; usually Caddy on localhost")
 )
 
@@ -66,33 +63,18 @@ func smtpConfigured() bool {
 	return smtpHost != "" && smtpPort != "" && smtpUser != "" && smtpPass != "" && contactTo != ""
 }
 
-const (
-	counterFile  = "downloads.count"
-	pollInterval = 30 * time.Second
-)
+const counterFile = "downloads.count"
 
-// stats is the shape of /api/stats output. Field names are snake_case so the
-// stats.html script can read them without translation.
+// stats is the shape of /api/stats output. Field name is snake_case so the
+// stats.html script can read it without translation.
 type stats struct {
-	Downloads   int64 `json:"downloads"`
-	OnlineNow   int   `json:"online_now"` // peers connected to the signaling server now
-	Rooms       int   `json:"rooms"`      // active rooms now
-	RefreshedAt int64 `json:"refreshed_at"`
+	Downloads int64 `json:"downloads"`
 }
 
 // downloads is incremented on every successful /dl/fliporium.exe response.
 // It's persisted to disk after each increment. We use atomic so the counter
 // stays correct under concurrent requests.
 var downloads atomic.Int64
-
-// Cached live counts from the most recent flipsignal /stats poll, so
-// /api/stats is always cheap.
-var (
-	nodeMu       sync.RWMutex
-	cachedOnline int
-	cachedRooms  int
-	cachedAt     time.Time
-)
 
 func main() {
 	flag.Parse()
@@ -103,12 +85,6 @@ func main() {
 		log.Fatalf("flipstats: load counter: %v", err)
 	}
 	log.Printf("flipstats: starting; downloads=%d listen=%s exe=%s", downloads.Load(), *listenAddr, *exePath)
-
-	// Prime the live counts once before serving.
-	if err := refreshSignalStats(); err != nil {
-		log.Printf("flipstats: initial signal-stats poll failed (%v); /api/stats reports 0s until next tick", err)
-	}
-	go pollLoop()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/stats", statsHandler)
@@ -137,21 +113,9 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	nodeMu.RLock()
-	online := cachedOnline
-	rooms := cachedRooms
-	at := cachedAt
-	nodeMu.RUnlock()
-
-	s := stats{
-		Downloads:   downloads.Load(),
-		OnlineNow:   online,
-		Rooms:       rooms,
-		RefreshedAt: at.Unix(),
-	}
 	w.Header().Set("Cache-Control", "public, max-age=30")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(s)
+	_ = json.NewEncoder(w).Encode(stats{Downloads: downloads.Load()})
 }
 
 func downloadHandler(w http.ResponseWriter, r *http.Request) {
@@ -270,18 +234,6 @@ func saveCounter(n int64) error {
 		return err
 	}
 	return os.Rename(tmp, path)
-}
-
-// ---------- signaling-server polling ----------
-
-func pollLoop() {
-	t := time.NewTicker(pollInterval)
-	defer t.Stop()
-	for range t.C {
-		if err := refreshSignalStats(); err != nil {
-			log.Printf("flipstats: signal-stats poll: %v", err)
-		}
-	}
 }
 
 // ---------- /api/contact ----------
@@ -502,30 +454,4 @@ func appendContact(rec storedContact) error {
 	defer f.Close()
 	_, err = f.Write(b)
 	return err
-}
-
-// refreshSignalStats pulls live room/peer counts from the signaling server.
-func refreshSignalStats() error {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(*signalStats)
-	if err != nil {
-		return fmt.Errorf("signal-stats GET: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("signal-stats HTTP %d", resp.StatusCode)
-	}
-	var s struct {
-		Rooms int `json:"rooms"`
-		Peers int `json:"peers"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
-		return fmt.Errorf("signal-stats decode: %w", err)
-	}
-	nodeMu.Lock()
-	cachedOnline = s.Peers
-	cachedRooms = s.Rooms
-	cachedAt = time.Now()
-	nodeMu.Unlock()
-	return nil
 }

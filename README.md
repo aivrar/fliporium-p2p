@@ -86,7 +86,7 @@ cmd/
     unfurl.go      sender-side link unfurling (+ SSRF / decode-bomb guards)
     frontend/dist  index.html / main.js / style.css (no build step)
   flipsignal/      signaling + matchmaking server (WebSocket)
-  flipstats/       public stats + .exe download counter + contact relay (VPS)
+  flipstats/       .exe download + download counter + contact relay (VPS)
   probestore/      dev tool: dump a store.db
   setpref/         dev tool: read/write the app_settings table
 internal/
@@ -189,7 +189,7 @@ the wiki goes from a bare Linux VPS to `wss://your-domain/ws` — building
 `flipsignal`, a systemd unit, Caddy for automatic HTTPS, and optional TURN.
 
 The repo's [`deploy/`](deploy/README.md) folder is the reference deployment for
-the *full* fliporium.com site (site + the `flipstats` download/stats/contact
+the *full* fliporium.com site (site + the `flipstats` download/contact
 service + coturn + Caddy) — more than a private signaling server needs.
 
 ## Contributing

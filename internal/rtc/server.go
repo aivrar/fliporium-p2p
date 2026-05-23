@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -228,32 +227,10 @@ func (s *Server) logf(format string, args ...any) {
 	}
 }
 
-// Stats is a snapshot of live signaling activity (aggregate only — no
-// per-user data).
-type Stats struct {
-	Rooms int `json:"rooms"`
-	Peers int `json:"peers"`
-}
-
-// Stats counts active rooms and connected peers right now.
-func (s *Server) Stats() Stats {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	peers := 0
-	for _, m := range s.rooms {
-		peers += len(m)
-	}
-	return Stats{Rooms: len(s.rooms), Peers: peers}
-}
-
-// Handler returns an http.Handler serving /ws (signaling), /stats, /healthz.
+// Handler returns an http.Handler serving /ws (signaling) and /healthz.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
-	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(s.Stats())
-	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
