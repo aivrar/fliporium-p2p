@@ -104,7 +104,9 @@ run.ps1            launch the GUI (builds first if needed)
 
 ## Build
 
-Requires Go 1.26+ on `PATH` (or the user-scope install at `~/go-sdk/bin`).
+Requires Go 1.26+ on `PATH` (or the user-scope install at `~/go-sdk/bin`). For a
+step-by-step walkthrough — prerequisites, running two peers locally, verifying
+the build, and troubleshooting — see **[BUILDING.md](BUILDING.md)**.
 
 ```powershell
 .\build.ps1            # GUI + signaling server
